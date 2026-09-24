@@ -18,6 +18,10 @@ evidence, the solution, and whether it is already fixed in PR #1.
   `EXPLAIN` (full-table scans) and through MySQL 8 strict mode (`ONLY_FULL_GROUP_BY`).
 - **Static analysis:** every query call in every file scanned for queries in loops,
   non-indexable comparisons, whole-table reads, blocking calls and crash-prone error handling.
+- **Endpoint pass:** all 253 read endpoints (every GET plus read-type POSTs across the 63 route
+  files) called one by one as an administrator, with the SQL each one ran captured and analysed.
+  208 ran fully; the rest returned 400/403/404 for the test parameters, and 10 hit gaps in the
+  rebuilt test schema (not code bugs).
 - **Regression checks:** every changed endpoint's response compared against the previous
   version on the same data; all 531 routes checked for access control before/after.
 
@@ -42,6 +46,8 @@ evidence, the solution, and whether it is already fixed in PR #1.
 | 5 | Admin list screens download whole tables (12–60 MB) | Leave, Payroll Released, Earnings | Needs pagination |
 | 6 | Spreadsheet imports block the server | Official Time, Upload Payroll, Salary Grade, Voluntary import | 5,000 rows ≈ 0.5 s freeze for everyone |
 | 7 | 17 known vulnerabilities (12 high) in dependencies | package.json | Includes connection-exhaustion DoS in Socket.IO |
+| 8 | Unused endpoint returns 123 MB in 8 s to any logged-in user | Attendance (`view-attendance-all-users`) | One call ties up the server and database |
+| 9 | Supervisor leave requests scan all leave requests (4.3 s per page) | supervisor | Every supervisor page load |
 
 ---
 
@@ -130,6 +136,9 @@ evidence, the solution, and whether it is already fixed in PR #1.
 | Table named both `AttendanceRecordInfo` (26×) and `attendancerecordinfo` (19×); on Linux these are different tables | Use one spelling everywhere (or set `lower_case_table_names=1` on a new server) | 🔧 |
 | `view-attendance-full` save updates day by day in a loop | Batch upsert (`INSERT … ON DUPLICATE KEY UPDATE`) for the month | 🔧 |
 | 4 GET endpoints write an audit row on every view (`check-attendance`, `dtr`, `dtr-employee-list`, `attendance_adjustment`) | Audit only admin views of other employees | 🔧 |
+| `POST /api/view-attendance-all-users` returns every DTR row for everyone (8.3 s, **123 MB**); no screen uses it (they use the `-paged` version), but any logged-in user can call it | Remove it or restrict it to admins with a date range and paging | 🔧 **high** |
+| Device insights endpoints scan all device punches through a derived table: `device-attendance-list` (>15 s), `device-insights-bundle` (6.7 s), `device-punch-insights` (4.5 s), `device-attendance-summary` (3.3 s) | Filter by date range before grouping (uses the `AttendanceDateTime` index); cache like `all-device-users` | 🔧 |
+| `dtr-employee-list` 2.0 s for an admin | Paging, or cache per date range | 🔧 low |
 | Admin DTR employee list / device users: 0.4–0.6 s per call | Acceptable (whole-organisation summaries; device list already cached 90 s) | ✔️ |
 
 ### `routes/officialtime.js`
@@ -224,6 +233,7 @@ evidence, the solution, and whether it is already fixed in PR #1.
 | Problem | Solution | Status |
 |---|---|---|
 | Appendix 33 template library and position overrides saved on the local disk | Shared storage or DB if more than one server | 🔧 (scale-out) |
+| `GET /export-appendix33/availability` takes 5.3 s | Cache per period, or compute with one grouped query | 🔧 |
 | Export built synchronously in memory | Worker thread for large exports | 🔧 low |
 
 ### `payrollRoutes/Remittance.js`
@@ -304,6 +314,7 @@ evidence, the solution, and whether it is already fixed in PR #1.
 | Problem | Solution | Status |
 |---|---|---|
 | Supervisor leave list: 3 correlated `COUNT` subqueries per employee over all leave requests | One grouped count | ✅ |
+| Supervisor leave **requests** joins departments to leave requests with `TRIM(CAST(...)) = TRIM(CAST(...))`, scanning all leave requests on each supervisor page load (4.3 s); transactions list 1.6 s | Load the department's employee numbers first, then `lr.employeeNumber IN (?)` | 🔧 |
 
 ### `routes/settings.js`
 | Problem | Solution | Status |
@@ -325,6 +336,7 @@ evidence, the solution, and whether it is already fixed in PR #1.
 |---|---|---|
 | Duplicate-notice check scanned all notifications per expiring assignment (~14 s DB time per run) | Direct comparison, indexed | ✅ (→ ~70 ms) |
 | Notice de-duplication is check-then-insert with no unique key | Unique key + `INSERT IGNORE` | 🔧 |
+| **Bug:** `notifyGranted` / `notifyRevoked` call `socketService.…` but the file never defines `socketService` (it imports named functions), so granting/revoking supervisor page access throws and no live update is sent (seen in the test run) | Call the imported `notifyPageAccessGranted` / `notifyPageAccessRevoked` directly | 🔧 |
 
 ---
 
@@ -337,10 +349,35 @@ evidence, the solution, and whether it is already fixed in PR #1.
 | MySQL 8 reserved words | ❌ `AS exists` in `/api/check-attendance` (fails on MariaDB and MySQL) |
 | `ON DUPLICATE KEY UPDATE col = VALUES(col)` (deprecated in MySQL 8.0.20+) | ⚠️ 24 uses; still works, warns |
 | `WITH RECURSIVE` | ⚠️ Requires MySQL 8.0 / MariaDB 10.2 or newer |
+| MySQL 8 strict mode (`ONLY_FULL_GROUP_BY`, strict tables) on every captured query | ✅ 0 failures |
 | Collations: 102 `CAST(... AS CHAR)` comparisons, likely added to avoid "Illegal mix of collations" | ⚠️ Align table/column collations (e.g. `utf8mb4_general_ci`), then remove the `CAST`s |
 | Timezone: `NOW()` in SQL vs dates written from Node | ⚠️ Set pool `timezone` and DB `time_zone` to the same zone |
 | Node version | ⚠️ No `engines` field; code needs Node 18+ |
 | Frontend build on Linux | ❌ Asset imports with wrong case (e.g. `EaristBG.PNG` vs `EaristBG.png`) |
+
+## Measured endpoint results (single request, admin, test database)
+
+Slowest or largest responses from the endpoint pass that are not yet fixed:
+
+| Endpoint | Time | Size | Module |
+|---|---|---|---|
+| `POST /attendance/api/device-attendance-list` | >15 s | — | Attendance |
+| `POST /attendance/api/view-attendance-all-users` | 8.3 s | 123 MB | Attendance |
+| `POST /attendance/api/device-insights-bundle` | 6.7 s | 1.8 MB | Attendance |
+| `GET /PayrollExportRoute/export-appendix33/availability` | 5.3 s | small | PayrollExport |
+| `POST /attendance/api/device-punch-insights` | 4.5 s | 0.8 MB | Attendance |
+| `GET /api/supervisor-leave/requests/:id` | 4.3 s | 0.8 MB | supervisor |
+| `POST /attendance/api/device-attendance-summary` | 3.3 s | 0.3 MB | Attendance |
+| `GET /attendance/api/dtr-employee-list` | 2.0 s | 0.7 MB | Attendance |
+| `GET /api/supervisor-leave/transactions/:id` | 1.6 s | 0.05 MB | supervisor |
+| `GET /PayrollReleasedRoute/released-payroll-detailed` (admin) | 1.3 s | 66 MB | PayrollReleased |
+| `GET /PayrollReleasedRoute/released-payroll` (admin) | 1.3 s | 60 MB | PayrollReleased |
+| `GET /leaveRoute/leave_assignment` (admin) | 1.2 s | 18 MB | leave |
+| `GET /leaveRoute/leave_request` (admin) | 0.7 s | 15 MB | leave |
+| `GET /officialtime/users-status` | 0.5 s | 2.0 MB | officialtime |
+| `GET /users` | 0.2 s | 2.6 MB | users |
+
+All other tested endpoints answered in under 200 ms for a single request.
 
 ## Not verified
 
