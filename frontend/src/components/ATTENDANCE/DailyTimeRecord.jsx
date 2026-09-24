@@ -574,14 +574,16 @@
       try {
         const empCatRes = await axios
           .get(
-            `${API_BASE_URL}/EmploymentCategoryRoutes/employment-category`,
+            // Only this employee's row: the list endpoint returns every
+            // employee (~1 MB) and was downloaded on each DTR load.
+            `${API_BASE_URL}/EmploymentCategoryRoutes/employment-category/${encodeURIComponent(empID)}`,
             getAuthHeaders(),
           )
-          .catch(() => ({ data: [] }));
-        const rows = Array.isArray(empCatRes.data) ? empCatRes.data : [];
-        const match = rows.find(
-          (item) => String(item.employeeNumber) === String(empID),
-        );
+          .catch(() => ({ data: null }));
+        const match =
+          empCatRes.data && String(empCatRes.data.employeeNumber) === String(empID)
+            ? empCatRes.data
+            : null;
         setEmploymentCategory(
           match
             ? {

@@ -1,4 +1,5 @@
 import API_BASE_URL from '../../apiConfig';
+import { fetchEmployeesByNumber } from '../../utils/employeeLookup';
 import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import axios from 'axios';
 import {
@@ -870,14 +871,11 @@ const ItemTable = () => {
       // Batch-fetch employee names for unique IDs not yet loaded
       const uniqueIds = [...new Set(items.map((item) => item.employeeID).filter(Boolean))];
       const namesMap = {};
-      await Promise.all(
-        uniqueIds.map(async (id) => {
-          try {
-            const r = await axios.get(`${API_BASE_URL}/Remittance/employees/${id}`, getAuthHeaders());
-            namesMap[id] = r.data.name || 'Unknown';
-          } catch { namesMap[id] = 'Unknown'; }
-        })
-      );
+      // One bulk lookup instead of a request per employee.
+      const found = await fetchEmployeesByNumber(uniqueIds);
+      uniqueIds.forEach((id) => {
+        namesMap[id] = found.get(String(id).trim())?.name || 'Unknown';
+      });
       setEmployeeNames(namesMap);
     } catch { showSnackbar('Failed to fetch item records. Please try again.', 'error'); }
   }, [showSnackbar]);

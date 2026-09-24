@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { notifyPayrollChanged } = require('../socket/socketService');
 const { authenticateToken, requireAdmin, logAudit } = require('../middleware/auth');
+const { attachEmploymentCategories } = require('../utils/employmentCategoryMerge');
 // ─────────────────────────────────────────────
 // UTILITY: time helpers
 // ─────────────────────────────────────────────
@@ -936,10 +937,11 @@ router.post('/add-rendered-time', authenticateToken, requireAdmin, async (req, r
 // ─────────────────────────────────────────────
 
 router.get('/payroll-processed', authenticateToken, requireAdmin, (req, res) => {
+  // Categories are merged in JS: the old CAST(...) = CAST(...) join compared
+  // every payroll row with every employment_category row.
   const query = `
-    SELECT pp.*, COALESCE(ec.employmentCategory, -1) AS employmentCategory
+    SELECT pp.*, -1 AS employmentCategory
     FROM payroll_processed pp
-    LEFT JOIN employment_category ec ON CAST(pp.employeeNumber AS CHAR) = CAST(ec.employeeNumber AS CHAR)
     ORDER BY pp.dateCreated DESC
   `;
 
@@ -949,7 +951,7 @@ router.get('/payroll-processed', authenticateToken, requireAdmin, (req, res) => 
       return res.status(500).json({ error: 'Internal server error' });
     }
 
-    res.json(results);
+    attachEmploymentCategories(results, (rows) => res.json(rows));
   });
 });
 

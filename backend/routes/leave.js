@@ -114,12 +114,14 @@ const fetchLeaveDeductionMeta = (employeeNumber, leave_code, leave_date = null) 
       `SELECT etc.typeName AS employment_type_name
        FROM users u
        LEFT JOIN employment_category ec
-         ON CAST(ec.employeeNumber AS CHAR) = CAST(u.employeeNumber AS CHAR)
+         ON ec.employeeNumber = ?
        LEFT JOIN employment_type_config etc
          ON etc.id = COALESCE(ec.employmentCategory, u.employmentCategory)
-       WHERE CAST(u.employeeNumber AS CHAR) = CAST(? AS CHAR)
+       WHERE u.employeeNumber = ?
        LIMIT 1`,
-      [employeeNumber],
+      // Bound parameters instead of CAST(col AS CHAR): lets MySQL use the
+      // users / employment_category indexes (this runs per leave deduction).
+      [employeeNumber, employeeNumber],
       (err, rows) => {
         const baseMeta = !err && rows?.length ? rows[0] : {};
         fetchOfficialTimeHoursForDate(employeeNumber, leave_date).then((officialHoursPerDay) => {

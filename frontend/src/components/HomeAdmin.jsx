@@ -919,6 +919,9 @@ const useDashboardData = (settings) => {
           ...prev,
           pendingPayroll: p.pending || 0,
           processedPayroll: p.processed || 0,
+          // Counted server-side: this used to download every released
+          // payslip ever (tens of MB) just to take its length.
+          payslipCount: p.released || 0,
         }));
         setPayrollStatusData([
           {
@@ -1014,14 +1017,6 @@ const useDashboardData = (settings) => {
         }
       })
       .finally(() => setLoadingCarousel(false));
-
-    axios
-      .get(`${API_BASE_URL}/PayrollReleasedRoute/released-payroll`, auth)
-      .then((res) => {
-        const payslipCount = Array.isArray(res.data) ? res.data.length : 0;
-        setStats((prev) => ({ ...prev, payslipCount }));
-      })
-      .catch((err) => console.error("payslip count failed:", err?.message));
 
     axios
       .get(`${API_BASE_URL}/api/dashboard/monthly-attendance`, auth)

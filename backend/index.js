@@ -686,6 +686,21 @@ ensureDepartmentAssignmentBudgetCode.forEach((sql) => {
 const ensureLeadingIndexes = [
   { table: 'notifications', name: 'idx_notifications_emp_id', columns: ['employeeNumber', 'id'] },
   { table: 'attendancerecordinfo', name: 'idx_ari_attendance_datetime', columns: ['AttendanceDateTime'] },
+  // Per-employee lookups behind the screens every staff member opens
+  // (Home, DTR, Payslip, Leave). Without them each load scans the whole table.
+  { table: 'users', name: 'idx_users_employee_number', columns: ['employeeNumber'] },
+  { table: 'person_table', name: 'idx_person_table_agency_employee_num', columns: ['agencyEmployeeNum'] },
+  { table: 'attendancerecord', name: 'idx_attendancerecord_person_date', columns: ['personID', 'date'] },
+  { table: 'officialtime', name: 'idx_officialtime_employee_dates', columns: ['employeeID', 'startDate', 'endDate'] },
+  { table: 'leave_request', name: 'idx_leave_request_employee_created', columns: ['employeeNumber', 'created_at'] },
+  { table: 'leave_assignment', name: 'idx_leave_assignment_employee_code', columns: ['employeeNumber', 'leave_code'] },
+  { table: 'payroll_released', name: 'idx_payroll_released_employee', columns: ['employeeNumber', 'dateReleased'] },
+  { table: 'employment_category', name: 'idx_employment_category_employee', columns: ['employeeNumber'] },
+  { table: 'transaction_table', name: 'idx_transaction_table_employee', columns: ['employee_id'] },
+  { table: 'notes', name: 'idx_notes_employee', columns: ['employee_number', 'created_at'] },
+  { table: 'events', name: 'idx_events_employee', columns: ['employee_number', 'created_at'] },
+  { table: 'service_credit', name: 'idx_service_credit_employee', columns: ['employeeNumber'] },
+  { table: 'cto_credit', name: 'idx_cto_credit_employee', columns: ['employeeNumber'] },
 ];
 ensureLeadingIndexes.forEach(({ table, name, columns }) => {
   db.query(

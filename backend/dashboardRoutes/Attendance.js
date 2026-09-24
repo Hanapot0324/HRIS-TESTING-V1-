@@ -256,21 +256,83 @@
     `${STATE_CORRECTION_REMARK_PREFIX} · punch status updated: ${attendanceStateLabel(previousState)} → ${attendanceStateLabel(newState)}`;
 
   /** SQL snippet: resolve display name for attendancerecord.modified_by */
-  const MODIFIER_NAME_SELECT = `
-    COALESCE(
-      NULLIF(TRIM(CONCAT_WS(' ', modp.firstName, modp.middleName, modp.lastName)), ''),
-      NULLIF(TRIM(CONCAT_WS(' ', modu_p.firstName, modu_p.middleName, modu_p.lastName)), ''),
-      modu.username
-    ) AS modified_by_name`;
+  // "Modified by" display name. It used to come from three LEFT JOINs on
+  // CAST(ar.modified_by AS CHAR) = CAST(... AS CHAR), which cannot use an index:
+  // every DTR load scanned person_table and users (about 90% of the query's time)
+  // even though almost no rows are modified. Names are now resolved afterwards by
+  // attachModifierNames(), only for rows that have a modifier.
+  const MODIFIER_NAME_SELECT = `NULL AS modified_by_name`;
+  const MODIFIER_NAME_JOINS = ``;
 
-  const MODIFIER_NAME_JOINS = `
-    LEFT JOIN person_table modp
-      ON CAST(ar.modified_by AS CHAR) = CAST(modp.agencyEmployeeNum AS CHAR)
-    LEFT JOIN users modu
-      ON CAST(ar.modified_by AS CHAR) = CAST(modu.employeeNumber AS CHAR)
-      OR ar.modified_by = modu.username
-    LEFT JOIN person_table modu_p
-      ON modu.employeeNumber = modu_p.agencyEmployeeNum`;
+  const modifierKey = (v) => String(v ?? '').trim().toLowerCase();
+  const joinName = (p) => {
+    if (!p) return null;
+    const name = [p.firstName, p.middleName, p.lastName]
+      .filter((v) => v != null)
+      .join(' ')
+      .trim();
+    return name || null;
+  };
+
+  /**
+   * Fill row.modified_by_name with the same precedence as the old SQL:
+   * person_table name for modified_by, else the name of the user whose
+   * employeeNumber or username is modified_by, else that user's username.
+   */
+  async function attachModifierNames(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const ids = [
+      ...new Set(
+        list
+          .map((r) => (r.modified_by == null ? '' : String(r.modified_by).trim()))
+          .filter(Boolean),
+      ),
+    ];
+    if (ids.length === 0) return list;
+
+    const [users] = await db
+      .promise()
+      .query(
+        'SELECT employeeNumber, username FROM users WHERE employeeNumber IN (?) OR username IN (?)',
+        [ids, ids],
+      );
+    const personKeys = [
+      ...new Set([
+        ...ids,
+        ...users.map((u) => String(u.employeeNumber ?? '').trim()).filter(Boolean),
+      ]),
+    ];
+    const [people] = await db
+      .promise()
+      .query(
+        'SELECT agencyEmployeeNum, firstName, middleName, lastName FROM person_table WHERE agencyEmployeeNum IN (?)',
+        [personKeys],
+      );
+
+    const personByEmp = new Map();
+    for (const p of people) {
+      const k = modifierKey(p.agencyEmployeeNum);
+      if (!personByEmp.has(k)) personByEmp.set(k, p);
+    }
+    const userByKey = new Map();
+    for (const u of users) {
+      for (const k of [modifierKey(u.employeeNumber), modifierKey(u.username)]) {
+        if (k && !userByKey.has(k)) userByKey.set(k, u);
+      }
+    }
+
+    for (const row of list) {
+      const k = modifierKey(row.modified_by);
+      if (!k) continue;
+      const user = userByKey.get(k);
+      row.modified_by_name =
+        joinName(personByEmp.get(k)) ||
+        (user && joinName(personByEmp.get(modifierKey(user.employeeNumber)))) ||
+        (user && user.username) ||
+        null;
+    }
+    return list;
+  }
 
   // Helper function to get day of week
   const getDayOfWeek = (dateString) => {
@@ -474,29 +536,35 @@
           ot.officialOverTimeOUT
         FROM leave_request lr
         INNER JOIN users u
-          ON CAST(u.employeeNumber AS CHAR) = CAST(lr.employeeNumber AS CHAR)
+          ON u.employeeNumber = ?
         INNER JOIN officialtime ot
-          ON CAST(ot.employeeID AS CHAR) = CAST(lr.employeeNumber AS CHAR)
+          ON ot.employeeID = ?
           AND ot.day = DAYNAME(lr.leave_date)
           AND lr.leave_date BETWEEN ot.startDate AND ot.endDate
           AND ot.id = (
             SELECT MAX(ot2.id)
             FROM officialtime ot2
-            WHERE CAST(ot2.employeeID AS CHAR) = CAST(lr.employeeNumber AS CHAR)
+            WHERE ot2.employeeID = ?
               AND ot2.day = DAYNAME(lr.leave_date)
               AND lr.leave_date BETWEEN ot2.startDate AND ot2.endDate
           )
         WHERE lr.status = 2
-          AND CAST(lr.employeeNumber AS CHAR) = CAST(? AS CHAR)
+          AND lr.employeeNumber = ?
           AND lr.leave_date BETWEEN ? AND ?
           AND NOT EXISTS (
             SELECT 1 FROM attendancerecord ar
-            WHERE CAST(ar.personID AS CHAR) = CAST(lr.employeeNumber AS CHAR)
+            WHERE ar.personID = ?
               AND ar.date = DATE_FORMAT(lr.leave_date, '%Y-%m-%d')
           )
       `;
 
-      db.query(leaveGapSql, [personId, startDate, endDate], (err2, leaveRows) => {
+      // Every employee-number comparison is bound to personId (lr is already
+      // filtered to it) instead of CAST(col AS CHAR) = CAST(lr.col AS CHAR):
+      // the CAST form cannot use indexes and scanned users, leave_request and
+      // officialtime in full on each My Attendance load.
+      const emp = String(personId ?? '');
+      const leaveGapParams = [emp, emp, emp, emp, startDate, endDate, emp];
+      db.query(leaveGapSql, leaveGapParams, (err2, leaveRows) => {
         if (err2) {
           console.error('Error fetching leave-only attendance rows:', err2);
           return res.json(results || []);
@@ -1079,7 +1147,12 @@
         console.error('view-attendance error:', err.message || err);
         return res.status(500).json({ error: err.message || 'Failed to fetch attendance records' });
       }
-      res.send(results);
+      attachModifierNames(results)
+        .then(() => res.send(results))
+        .catch((nameErr) => {
+          console.error('view-attendance modifier names:', nameErr.message);
+          res.send(results);
+        });
     });
   });
 
@@ -3048,7 +3121,7 @@
                     const key = normYmd(row.date);
                     if (key) specialByDate[key] = row;
                   }
-                  resolve();
+                  attachModifierNames(rows).then(() => resolve(), reject);
                 },
               );
             });
@@ -3491,18 +3564,24 @@
           return res.status(500).json({ error: err.message });
         }
 
-        const tagged = results.map((row) => ({
-          ...row,
-          isNew:        row.recordId == null,
-          timeIN:       row.timeIN       ?? '',
-          breaktimeIN:  row.breaktimeIN  ?? '',
-          breaktimeOUT: row.breaktimeOUT ?? '',
-          timeOUT:      row.timeOUT      ?? '',
-        }));
-
-        res.json(tagged);
+        attachModifierNames(results)
+          .catch((nameErr) => console.error('view-attendance-full modifier names:', nameErr.message))
+          .then(() => sendTagged(results));
       },
     );
+
+    function sendTagged(results) {
+      const tagged = results.map((row) => ({
+        ...row,
+        isNew:        row.recordId == null,
+        timeIN:       row.timeIN       ?? '',
+        breaktimeIN:  row.breaktimeIN  ?? '',
+        breaktimeOUT: row.breaktimeOUT ?? '',
+        timeOUT:      row.timeOUT      ?? '',
+      }));
+
+      res.json(tagged);
+    }
   });
 
   // ─── UPSERT full-month records ────────────────────────────────────────────────

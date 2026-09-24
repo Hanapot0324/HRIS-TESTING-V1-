@@ -832,9 +832,9 @@ router.get('/api/supervisor-leave/employees/:supervisorEmployeeNumber', authenti
         da.code AS departmentCode,
         dt.description AS departmentDescription,
         CONCAT_WS(' ', p.firstName, p.middleName, p.lastName, p.nameExtension) AS employeeName,
-        (SELECT COUNT(*) FROM leave_request lr WHERE CAST(lr.employeeNumber AS CHAR) = CAST(da.employeeNumber AS CHAR) AND lr.status = 0) AS pendingCount,
-        (SELECT COUNT(*) FROM leave_request lr WHERE CAST(lr.employeeNumber AS CHAR) = CAST(da.employeeNumber AS CHAR) AND lr.status = 1) AS supervisorApprovedCount,
-        (SELECT COUNT(*) FROM leave_request lr WHERE CAST(lr.employeeNumber AS CHAR) = CAST(da.employeeNumber AS CHAR) AND lr.status = 2) AS hrApprovedCount
+        0 AS pendingCount,
+        0 AS supervisorApprovedCount,
+        0 AS hrApprovedCount
       FROM department_assignment da
       LEFT JOIN department_table dt ON dt.code = da.code
       LEFT JOIN person_table p      ON p.agencyEmployeeNum = da.employeeNumber
@@ -843,7 +843,35 @@ router.get('/api/supervisor-leave/employees/:supervisorEmployeeNumber', authenti
     `;
     db.query(sql, codes, (err2, rows) => {
       if (err2) return res.status(500).json({ error: 'Failed to fetch department employees' });
-      res.json(Array.isArray(rows) ? rows : []);
+      const list = Array.isArray(rows) ? rows : [];
+      // Leave counts in one grouped, index-friendly query. They used to be three
+      // correlated CAST(...) subqueries per employee, each scanning all of
+      // leave_request (millions of row reads for a large department).
+      const keyOf = (v) => String(v ?? '').trimEnd().toLowerCase();
+      const empNums = [...new Set(list.map((r) => String(r.employeeNumber ?? '')).filter(Boolean))];
+      if (empNums.length === 0) return res.json(list);
+      db.query(
+        `SELECT employeeNumber, status, COUNT(*) AS n
+         FROM leave_request
+         WHERE employeeNumber IN (?) AND status IN (0, 1, 2)
+         GROUP BY employeeNumber, status`,
+        [empNums],
+        (err3, counts) => {
+          if (err3) return res.status(500).json({ error: 'Failed to fetch department employees' });
+          const field = { 0: 'pendingCount', 1: 'supervisorApprovedCount', 2: 'hrApprovedCount' };
+          const byEmp = new Map();
+          for (const c of counts) {
+            const k = keyOf(c.employeeNumber);
+            const f = field[Number(c.status)];
+            if (!f) continue;
+            const acc = byEmp.get(k) || { pendingCount: 0, supervisorApprovedCount: 0, hrApprovedCount: 0 };
+            acc[f] += Number(c.n) || 0;
+            byEmp.set(k, acc);
+          }
+          for (const r of list) Object.assign(r, byEmp.get(keyOf(r.employeeNumber)) || {});
+          res.json(list);
+        },
+      );
     });
   });
 });

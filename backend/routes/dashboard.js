@@ -419,6 +419,16 @@ async function computePayrollSummary() {
       'SELECT COUNT(*) as count FROM payroll_processing WHERE status = 0'
     );
 
+  let released = 0;
+  try {
+    const [releasedCount] = await db
+      .promise()
+      .query('SELECT COUNT(*) as count FROM payroll_released');
+    released = releasedCount[0]?.count || 0;
+  } catch (releasedErr) {
+    console.warn('dashboard released payslip count:', releasedErr?.message);
+  }
+
   const [latestPayroll] = await db.promise().query(`
   SELECT startDate, endDate, COUNT(*) as employeeCount 
   FROM payroll_processing 
@@ -431,6 +441,7 @@ async function computePayrollSummary() {
     processed: totalProcessed[0]?.count || 0,
     pending: totalPending[0]?.count || 0,
     latestPeriod: latestPayroll[0] || null,
+    released,
   };
 }
 

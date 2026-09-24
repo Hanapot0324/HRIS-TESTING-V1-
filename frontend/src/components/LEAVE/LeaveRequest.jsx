@@ -1,4 +1,5 @@
 import API_BASE_URL from '../../apiConfig';
+import { fetchEmployeesByNumber } from '../../utils/employeeLookup';
 import React, {
   useState,
   useEffect,
@@ -1924,12 +1925,12 @@ const LeaveRequest = () => {
       setRemainingByEmpCode(buildRemainingByEmpCode(assignments, usageRows));
       const names   = {};
       const empNums = [...new Set(requests.map((r) => r.employeeNumber))];
-      await Promise.all(empNums.map(async (emp) => {
-        try {
-          const res = await axios.get(`${API_BASE_URL}/personalinfo/person_table/${emp}`, getAuthHeaders());
-          names[emp] = [res.data.firstName, res.data.lastName].filter(Boolean).join(' ') || 'Unknown';
-        } catch { names[emp] = 'Unknown'; }
-      }));
+      // One bulk lookup instead of a request per employee.
+      const found = await fetchEmployeesByNumber(empNums);
+      empNums.forEach((emp) => {
+        const p = found.get(String(emp ?? '').trim());
+        names[emp] = [p?.firstName, p?.lastName].filter(Boolean).join(' ') || 'Unknown';
+      });
       setEmployeeNames(names);
       const token = localStorage.getItem('token');
       if (token) {
@@ -2167,18 +2168,17 @@ const LeaveRequest = () => {
       );
       const empNums  = [...new Set(sorted.map((log) => log.employee_id || log.employeeNumber).filter(Boolean))];
       const newNames = { ...employeeNames };
-      await Promise.all(empNums.map(async (emp) => {
-        if (!newNames[emp]) {
-          try {
-            const nameRes       = await axios.get(`${API_BASE_URL}/personalinfo/person_table/${emp}`, getAuthHeaders());
-            const firstName     = nameRes.data.firstName  || '';
-            const middleName    = nameRes.data.middleName || '';
-            const lastName      = nameRes.data.lastName   || '';
-            const middleInitial = middleName ? middleName.charAt(0) + '.' : '';
-            newNames[emp]       = `${lastName}, ${firstName} ${middleInitial}`.replace(/\s+/g, ' ').trim() || 'Unknown';
-          } catch { newNames[emp] = 'Unknown'; }
-        }
-      }));
+      const missing = empNums.filter((emp) => !newNames[emp]);
+      const found   = await fetchEmployeesByNumber(missing);
+      missing.forEach((emp) => {
+        const p = found.get(String(emp ?? '').trim());
+        if (!p) { newNames[emp] = 'Unknown'; return; }
+        const firstName     = p.firstName  || '';
+        const middleName    = p.middleName || '';
+        const lastName      = p.lastName   || '';
+        const middleInitial = middleName ? middleName.charAt(0) + '.' : '';
+        newNames[emp]       = `${lastName}, ${firstName} ${middleInitial}`.replace(/\s+/g, ' ').trim() || 'Unknown';
+      });
       setEmployeeNames(newNames);
       setTxLogs(sorted); setAuditPage(1);
     } catch (e) { setTxError('Failed to load transaction logs.'); setTxLogs([]); }

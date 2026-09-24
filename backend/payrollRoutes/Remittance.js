@@ -16,6 +16,45 @@ const getFullNameSQL = () => {
   ) as name`;
 };
 
+/**
+ * Names for many employees in one round trip. Admin screens (PDS sections,
+ * Leave Request, Department Assignment, Item Table, ...) used to call
+ * GET /employees/:employeeNumber once per row, i.e. thousands of requests per
+ * page load. Rows mirror GET /employees/:employeeNumber, plus person_table-only
+ * employees (no users row), which the per-row person_table lookups also found.
+ */
+router.post('/employees/lookup', authenticateToken, requireAdmin, (req, res) => {
+  const ids = [
+    ...new Set(
+      (Array.isArray(req.body?.employeeNumbers) ? req.body.employeeNumbers : [])
+        .map((e) => String(e ?? '').trim())
+        .filter(Boolean),
+    ),
+  ].slice(0, 5000);
+  if (ids.length === 0) return res.json([]);
+
+  const sql = `
+    SELECT u.employeeNumber, ${getFullNameSQL()},
+           p.firstName, p.middleName, p.lastName, p.nameExtension
+    FROM users u
+    LEFT JOIN person_table p ON u.employeeNumber = p.agencyEmployeeNum
+    WHERE u.employeeNumber IN (?)
+    UNION ALL
+    SELECT p.agencyEmployeeNum AS employeeNumber, ${getFullNameSQL()},
+           p.firstName, p.middleName, p.lastName, p.nameExtension
+    FROM person_table p
+    WHERE p.agencyEmployeeNum IN (?)
+      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.employeeNumber = p.agencyEmployeeNum)
+  `;
+  db.query(sql, [ids, ids], (err, rows) => {
+    if (err) {
+      console.error('Error looking up employees:', err);
+      return res.status(500).json({ message: 'Error looking up employees' });
+    }
+    return res.json(rows);
+  });
+});
+
 router.get('/employees/search', authenticateToken, requireAdmin, (req, res) => {
   const { q } = req.query;
 
