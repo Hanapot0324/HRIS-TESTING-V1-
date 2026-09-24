@@ -7,6 +7,7 @@ const { upload } = require('../middleware/upload');
 const { broadcastToRoles, notifyMultipleUsers } = require('../socket/socketService');
 const { notifyPayrollChanged } = require('../socket/socketService');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { insertNotificationsBulk } = require('../utils/notificationFanout');
 const { parseBranchField } = require('../utils/branchScope');
 
 function notifyEmployeesForHoliday(holidayId, branch, notificationDescription, res) {
@@ -41,29 +42,18 @@ function notifyEmployeesForHoliday(holidayId, branch, notificationDescription, r
       ),
     );
     if (employeeNumbers.length === 0) return finishOk();
-    let completed = 0;
-    employeeNumbers.forEach((empNum) => {
-      db.query(
-        'INSERT INTO notifications (employeeNumber, description, read_status, notification_type, action_link) VALUES (?, ?, 0, ?, ?)',
-        [empNum, notificationDescription, 'holiday', `/holiday/${holidayId}`],
-        (notifErr) => {
-          if (notifErr) {
-            db.query(
-              'INSERT INTO notifications (employeeNumber, description, read_status) VALUES (?, ?, 0)',
-              [empNum, notificationDescription],
-              () => {},
-            );
-          }
-          completed++;
-          if (completed === employeeNumbers.length) {
-            notifyMultipleUsers(employeeNumbers, 'notificationCreated', {
-              notification_type: 'holiday',
-              description: notificationDescription,
-            });
-          }
-        },
-      );
-    });
+    insertNotificationsBulk(employeeNumbers, {
+      description: notificationDescription,
+      type: 'holiday',
+      actionLink: `/holiday/${holidayId}`,
+    })
+      .then(() => {
+        notifyMultipleUsers(employeeNumbers, 'notificationCreated', {
+          notification_type: 'holiday',
+          description: notificationDescription,
+        });
+      })
+      .catch((e) => console.error('Holiday notification insert error:', e));
     finishOk();
   });
 }

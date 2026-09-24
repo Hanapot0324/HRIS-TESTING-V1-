@@ -4,7 +4,9 @@ const db = require('../db');
 const { authenticateToken, logAudit, requireAdmin } = require('../middleware/auth');
 const { notifyPayrollChanged } = require('../socket/socketService');
 
-router.use(authenticateToken, requireAdmin);
+// Mounted at '/' in index.js: scope the guard to this router's own paths so it
+// does not run on (and reject) every other request that passes through.
+router.use('/api/item-table', authenticateToken, requireAdmin);
 const {
   fillExemptAttendanceForEmployeeOfficialRanges,
 } = require('../services/autoAttendanceService');

@@ -678,6 +678,42 @@ ensureDepartmentAssignmentBudgetCode.forEach((sql) => {
   });
 });
 
+// Indexes for lookups every logged-in user triggers (Home notifications,
+// device-punch polling). Without them each request scans the whole table,
+// which is what makes the app crawl once many users are online at once.
+// Skipped when any index already leads with the column (e.g. created by
+// migrations/add_concurrency_indexes.sql or an older migration).
+const ensureLeadingIndexes = [
+  { table: 'notifications', name: 'idx_notifications_emp_id', columns: ['employeeNumber', 'id'] },
+  { table: 'attendancerecordinfo', name: 'idx_ari_attendance_datetime', columns: ['AttendanceDateTime'] },
+];
+ensureLeadingIndexes.forEach(({ table, name, columns }) => {
+  db.query(
+    `SELECT t.TABLE_NAME AS tableName,
+            EXISTS (
+              SELECT 1 FROM information_schema.STATISTICS s
+              WHERE s.TABLE_SCHEMA = t.TABLE_SCHEMA AND s.TABLE_NAME = t.TABLE_NAME
+                AND s.COLUMN_NAME = ? AND s.SEQ_IN_INDEX = 1
+            ) AS hasIndex
+     FROM information_schema.TABLES t
+     WHERE t.TABLE_SCHEMA = DATABASE() AND LOWER(t.TABLE_NAME) = LOWER(?)
+       AND t.TABLE_TYPE = 'BASE TABLE'
+     LIMIT 1`,
+    [columns[0], table],
+    (err, rows) => {
+      if (err || !rows[0] || Number(rows[0].hasIndex)) return;
+      const cols = columns.map((c) => `\`${c}\``).join(', ');
+      db.query(`CREATE INDEX ${name} ON \`${rows[0].tableName}\` (${cols})`, (idxErr) => {
+        if (idxErr && idxErr.code !== 'ER_DUP_KEYNAME') {
+          console.error(`${table}.${columns[0]} index ensure:`, idxErr.message);
+        } else if (!idxErr) {
+          console.log(`Created index ${name} on ${rows[0].tableName}`);
+        }
+      });
+    },
+  );
+});
+
 db.query('DROP TABLE IF EXISTS dtr_computed_daily_late', (err) => {
   if (err) {
     console.warn('dtr_computed_daily_late drop (optional):', err.message);

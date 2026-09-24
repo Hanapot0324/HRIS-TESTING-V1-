@@ -53,6 +53,7 @@ import DtrNoticePanel from "./DtrNoticePanel";
 // ─── Employee essentials widgets (action center, today, leave, SC, tickets…) ──
 import EmployeeHomeWidgets, { EmployeeTodayCard } from "./EmployeeHomeWidgets";
 import earistBg from "../assets/EaristBG.PNG";
+import { broadcastRefreshDelay } from "../utils/realtimeRefresh";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const T = {
@@ -617,7 +618,7 @@ const Home = () => {
     const refreshTimeoutRef = { current: null };
     const scheduleRefresh = () => {
       if (refreshTimeoutRef.current) return;
-      refreshTimeoutRef.current = setTimeout(() => { refreshTimeoutRef.current = null; if (typeof fetchNotificationsRef.current === "function") fetchNotificationsRef.current(); }, 250);
+      refreshTimeoutRef.current = setTimeout(() => { refreshTimeoutRef.current = null; if (typeof fetchNotificationsRef.current === "function") fetchNotificationsRef.current(); }, broadcastRefreshDelay());
     };
     const handleAnnouncementChanged = (payload) => {
       const { action, announcement } = payload;

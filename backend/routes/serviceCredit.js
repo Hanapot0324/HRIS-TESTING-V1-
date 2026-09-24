@@ -172,7 +172,7 @@ const logScBalanceChange = async ({
 };
  
 // ─── GET /ot-types ────────────────────────────────────────────────────────────
-router.get('/ot-types', (req, res) => {
+router.get('/ot-types', authenticateToken, (req, res) => {
   db.query(
     `SELECT id, name, description, multiplier, sort_order
      FROM ot_type

@@ -2,9 +2,22 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const bcrypt = require('bcryptjs');
+const { mapWithConcurrency } = require('../utils/concurrency');
 const { authenticateToken, logAudit, requireAdmin, requireSuperAdmin, requireSelfOrAdmin, requireRoles } = require('../middleware/auth');
 const transporter = require('../config/email');
 const { notifyPayrollChanged } = require('../socket/socketService');
+
+/** Rows registered in parallel by POST bulk-register (each row runs ~6 queries). */
+const BULK_REGISTER_CONCURRENCY = 5;
+
+/**
+ * Callback for fire-and-forget cleanup queries. A db.query without a callback
+ * emits an unhandled 'error' event on failure (e.g. "Queue limit reached"),
+ * which crashes the whole server.
+ */
+const logQueryError = (err) => {
+  if (err) console.error('Background query failed:', err.message);
+};
 
 // Helper function to validate email
 const validateEmail = (email, isRestricted) => {
@@ -557,7 +570,7 @@ router.post('/register', async (req, res) => {
                   console.error('Error inserting into person_table:', err);
                   const cleanupQuery =
                     'DELETE FROM users WHERE employeeNumber = ?';
-                  db.query(cleanupQuery, [employeeNumber]);
+                  db.query(cleanupQuery, [employeeNumber], logQueryError);
                   return res
                     .status(500)
                     .send({ error: 'Failed to create person record' });
@@ -584,10 +597,11 @@ router.post('/register', async (req, res) => {
                       db.query(
                         'DELETE FROM person_table WHERE agencyEmployeeNum = ?',
                         [employeeNumber],
+                        logQueryError,
                       );
                       db.query('DELETE FROM users WHERE employeeNumber = ?', [
                         employeeNumber,
-                      ]);
+                      ], logQueryError);
                       return res.status(500).send({
                         error: 'Failed to create employment category record',
                       });
@@ -825,10 +839,26 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
     });
     const activeTypeIds = new Set(activeTypeRows.map((r) => String(r.id)));
 
-    await Promise.all(
-      users.map(
-        (user) =>
-          new Promise((resolve) => {
+    // Bounded concurrency: registering every row at once (Promise.all) fired
+    // thousands of parallel queries, overflowing the DB pool queue and
+    // stalling every other user until the upload finished.
+    await mapWithConcurrency(
+      users,
+      BULK_REGISTER_CONCURRENCY,
+      async (user) => {
+        // Async hash: hashSync (pure-JS bcryptjs) blocked the event loop for
+        // every row, freezing the whole server during large uploads.
+        let hashedPassword;
+        try {
+          hashedPassword = await bcrypt.hash(user.password, 10);
+        } catch (hashErr) {
+          errors.push(
+            `Invalid password for ${user.employeeNumber}: ${hashErr.message}`,
+          );
+          return;
+        }
+
+        return new Promise((resolve) => {
             const fullName = [
               user.firstName,
               user.middleName || '',
@@ -917,7 +947,7 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
                   [
                     user.email,
                     'staff',
-                    bcrypt.hashSync(user.password, 10),
+                    hashedPassword,
                     user.employeeNumber,
                     user.employmentCategory, // ✅ can be NULL now
                     'user',
@@ -959,6 +989,7 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
                           db.query(
                             'DELETE FROM users WHERE employeeNumber = ?',
                             [user.employeeNumber],
+                            logQueryError,
                           );
                           return resolve();
                         }
@@ -982,10 +1013,12 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
                                 db.query(
                                   'DELETE FROM person_table WHERE agencyEmployeeNum = ?',
                                   [user.employeeNumber],
+                                  logQueryError,
                                 );
                                 db.query(
                                   'DELETE FROM users WHERE employeeNumber = ?',
                                   [user.employeeNumber],
+                                  logQueryError,
                                 );
                                 return done();
                               }
@@ -1023,10 +1056,12 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
                                   db.query(
                                     'DELETE FROM person_table WHERE agencyEmployeeNum = ?',
                                     [user.employeeNumber],
+                                    logQueryError,
                                   );
                                   db.query(
                                     'DELETE FROM users WHERE employeeNumber = ?',
                                     [user.employeeNumber],
+                                    logQueryError,
                                   );
                                 }
                                 done();
@@ -1045,17 +1080,26 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
                             grantDefaultAccessQuery,
                             (pagesErr, pagesResult) => {
                               if (!pagesErr && pagesResult.length > 0) {
-                                pagesResult.forEach((page) => {
-                                  const insertAccessQuery = `
+                                // One multi-row insert per user, with a callback:
+                                // callback-less queries emit an unhandled 'error'
+                                // event on failure, which crashes the server.
+                                const insertAccessQuery = `
                                   INSERT INTO page_access (employeeNumber, page_id, page_privilege)
-                                  VALUES (?, ?, '1')
+                                  VALUES ?
                                   ON DUPLICATE KEY UPDATE page_privilege = '1'
                                 `;
-                                  db.query(insertAccessQuery, [
-                                    user.employeeNumber,
-                                    page.id,
-                                  ]);
-                                });
+                                db.query(
+                                  insertAccessQuery,
+                                  [pagesResult.map((page) => [user.employeeNumber, page.id, '1'])],
+                                  (accessErr) => {
+                                    if (accessErr) {
+                                      console.error(
+                                        `Error granting default page access for ${user.employeeNumber}:`,
+                                        accessErr.message,
+                                      );
+                                    }
+                                  },
+                                );
                               }
                             },
                           );
@@ -1120,8 +1164,8 @@ router.post('/excel-register', authenticateToken, requireAdmin, async (req, res)
                 );
               },
             );
-          }),
-      ),
+        });
+      },
     );
 
     res.json({

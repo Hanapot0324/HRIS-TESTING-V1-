@@ -17,9 +17,15 @@ const connectionLimit = Math.max(
   10,
   parseInt(process.env.DB_CONNECTION_LIMIT || '40', 10) || 40,
 );
+/**
+ * Requests waiting for a free connection. Past this, queries fail immediately
+ * with "Queue limit reached" (HTTP 500). 200 was hit by an ordinary burst of
+ * users opening pages at once (each page load runs several queries), so allow
+ * a deeper queue: a short wait is better than an error.
+ */
 const queueLimit = Math.max(
   0,
-  parseInt(process.env.DB_QUEUE_LIMIT || '200', 10) || 200,
+  parseInt(process.env.DB_QUEUE_LIMIT || '1000', 10) || 1000,
 );
 
 const pool = mysql.createPool({
