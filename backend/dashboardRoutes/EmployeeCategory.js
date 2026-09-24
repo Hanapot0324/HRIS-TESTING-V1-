@@ -2,7 +2,7 @@ const db = require("../db");
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const { requireAdmin, JWT_SECRET } = require('../middleware/auth');
+const { requireAdmin, JWT_SECRET, employeeNumbersMatch } = require('../middleware/auth');
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -271,7 +271,12 @@ router.get('/employment-category/:employeeNumber', authenticateToken, (req, res)
     if (results.length === 0)
       return res.status(404).json({ message: 'Employment category not found' });
 
-    logAudit(req.user, 'view', 'employment_category', results[0].id, employeeNumber);
+    // An employee reading their own category (DTR badge on every DTR load) is
+    // not a record view worth auditing; each audit row is also broadcast to all
+    // admins. Viewing someone else's record is still audited.
+    if (!employeeNumbersMatch(req.user?.employeeNumber, employeeNumber)) {
+      logAudit(req.user, 'view', 'employment_category', results[0].id, employeeNumber);
+    }
     res.json(results[0]);
   });
 });
