@@ -420,21 +420,57 @@ const getLogLeaveType = (log, leaveTypes = []) => {
 
 const getLogLeaveCategory = (log, leaveTypes = []) => normalizeLeaveCategory(getLogLeaveType(log, leaveTypes) || {});
 
+const isEmptyTimeValue = (v) =>
+  v == null || String(v).trim() === '' || String(v).trim().toUpperCase() === 'N/A';
+
+const formatOfficialTimeShort = (t) => {
+  if (!t) return null;
+  const m = String(t).trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+  if (!m) return String(t).trim();
+  return `${parseInt(m[1], 10)}:${m[2]}${m[3] ? ` ${m[3].toUpperCase()}` : ''}`;
+};
+
+const getInitialsFromName = (name) => {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+};
+
 // ─── Leave Balance Card ────────────────────────────────────────────────────────
-const LeaveBalanceCard = ({ balance, isActive }) => {
+// When onSelect is provided, the card acts as a button that sets the HR "Charge to" balance.
+const LeaveBalanceCard = ({ balance, isActive, onSelect, disabled = false }) => {
   const isSC  = balance.code === 'SC';
   const isCTO = balance.code === 'CTO';
-  const cardBg     = isSC ? 'rgba(21,101,192,0.06)'  : isCTO ? 'rgba(27,94,32,0.06)'  : isActive ? T.accentFaint : '#fff';
-  const cardBorder = isSC ? `1px solid rgba(21,101,192,0.28)` : isCTO ? `1px solid rgba(27,94,32,0.28)` : isActive ? `1px solid rgba(109,35,35,0.25)` : `1px solid ${T.accentBorder}`;
+  const selectable = typeof onSelect === 'function' && !disabled;
+  const cardBg     = isActive ? (isSC ? 'rgba(21,101,192,0.1)' : isCTO ? 'rgba(27,94,32,0.1)' : T.accentFaint) : isSC ? 'rgba(21,101,192,0.06)' : isCTO ? 'rgba(27,94,32,0.06)' : '#fff';
+  const cardBorder = isActive ? (isSC ? '#1565C0' : isCTO ? '#1B5E20' : T.accent) : isSC ? 'rgba(21,101,192,0.28)' : isCTO ? 'rgba(27,94,32,0.28)' : T.accentBorder;
   const codeColor    = isSC ? '#1565C0' : isCTO ? '#1B5E20' : T.accent;
   const balanceColor = isSC ? '#1565C0' : isCTO ? '#1B5E20' : T.accent;
   const daysNum = Number(balance.totalDays);
   const daysStr = (Number.isFinite(daysNum) ? daysNum : 0).toFixed(3);
   return (
-    <Box sx={{ border: cardBorder, borderRadius: 1.25, px: 0.9, py: 0.55, bgcolor: cardBg, minWidth: 0 }}>
-      <Typography sx={{ fontSize: '0.65rem', fontWeight: 800, color: codeColor, lineHeight: 1.15, letterSpacing: '0.03em' }}>
-        {balance.code}
-      </Typography>
+    <Box
+      component={selectable ? 'button' : 'div'}
+      type={selectable ? 'button' : undefined}
+      disabled={selectable ? false : undefined}
+      onClick={selectable ? () => onSelect(balance.code) : undefined}
+      sx={{
+        border: `1.5px solid ${cardBorder}`, borderRadius: 1.25, px: 0.9, py: 0.55, bgcolor: cardBg, minWidth: 0,
+        display: 'block', width: '100%', textAlign: 'left', font: 'inherit', appearance: 'none',
+        cursor: selectable ? 'pointer' : disabled ? 'not-allowed' : 'default',
+        opacity: disabled ? 0.55 : 1,
+        boxShadow: isActive ? `0 0 0 1px ${cardBorder} inset` : 'none',
+        transition: 'border-color 0.15s, background-color 0.15s, box-shadow 0.15s',
+        ...(selectable && { '&:hover': { borderColor: cardBorder, bgcolor: isActive ? cardBg : T.accentFaint } }),
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 0.5 }}>
+        <Typography sx={{ fontSize: '0.65rem', fontWeight: 800, color: codeColor, lineHeight: 1.15, letterSpacing: '0.03em' }}>
+          {balance.code}
+        </Typography>
+        {isActive && selectable && <CheckCircle sx={{ fontSize: 11, color: codeColor, flexShrink: 0 }} />}
+      </Box>
       <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 0.75, mt: 0.2 }}>
         <Typography sx={{ fontSize: '0.68rem', fontWeight: 500, color: T.text, minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {balance.description}
@@ -872,10 +908,53 @@ const ViewModal = ({
   const [balancesLoading,  setBalancesLoading]  = useState(false);
   const [scHours,          setScHours]          = useState(0);
   const [ctoHours,         setCtoHours]         = useState(0);
+  const [requestInfoMeta,  setRequestInfoMeta]  = useState({ employmentTypeName: '', officialTime: null });
+  const [denialReason,     setDenialReason]     = useState('');
 
   useEffect(() => {
     if (request) setLocalStatus(String(request.status));
+    setDenialReason('');
   }, [request]);
+
+  // Employment type + official time (for the day of the first leave date) shown in
+  // Request Info — independent of HR-approval flow so it's populated for every status.
+  useEffect(() => {
+    if (!open || !request) return;
+    let alive = true;
+    (async () => {
+      const leaveDatesArr = Array.isArray(request.leave_date)
+        ? request.leave_date
+        : String(request.leave_date || '').split(',').map((s) => s.trim()).filter(Boolean);
+      const firstDate = leaveDatesArr[0] || null;
+
+      const [ctxRes, otRes] = await Promise.allSettled([
+        axios.post(
+          `${API_BASE_URL}/leaveRoute/leave_request/hr-deduction-context`,
+          { employeeNumber: request.employeeNumber, leave_code: request.leave_code },
+          getAuthHeaders(),
+        ),
+        firstDate
+          ? axios.get(`${API_BASE_URL}/officialtimetable/${request.employeeNumber}?date=${firstDate}&skipAudit=1`, getAuthHeaders())
+          : Promise.resolve(null),
+      ]);
+      if (!alive) return;
+
+      const employmentTypeName = ctxRes.status === 'fulfilled' ? (ctxRes.value.data?.employmentTypeName || '') : '';
+
+      let officialTime = null;
+      if (firstDate && otRes.status === 'fulfilled' && Array.isArray(otRes.value?.data)) {
+        const [y, m, d] = firstDate.split('-');
+        const dayName = new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+        const row = otRes.value.data.find((r) => String(r.day || '').trim().toLowerCase() === dayName.toLowerCase());
+        if (row && !isEmptyTimeValue(row.officialTimeIN) && !isEmptyTimeValue(row.officialTimeOUT)) {
+          officialTime = { timeIn: row.officialTimeIN, timeOut: row.officialTimeOUT };
+        }
+      }
+
+      setRequestInfoMeta({ employmentTypeName, officialTime });
+    })();
+    return () => { alive = false; };
+  }, [open, request?.employeeNumber, request?.leave_code, request?.leave_date]);
 
   // ── FIX: fetch usage transactions alongside assignments so getLeaveTypeStatsActive
   //         can compute the correct effective remaining (not just remaining_hours). ──
@@ -1008,6 +1087,8 @@ const ViewModal = ({
   const isLocked           = ['2', '3', '4'].includes(String(request.status));
   const isHrApprovedLocked = String(request.status) === '2';
   const isHrApprovalFlow   = !isLocked && String(localStatus) === '2' && String(request.status) !== '2';
+  const isDenyFlow         = !isLocked && String(localStatus) === '3';
+  const denialReasonMissing = isDenyFlow && !denialReason.trim();
   const statusChanged    = localStatus !== String(request.status);
 
   const empName   = employeeNames[request.employeeNumber] || '—';
@@ -1055,271 +1136,290 @@ const ViewModal = ({
     ? (leaveTypes.find((t) => t.leave_code === chargeToCode)?.leave_description || chargeToCode)
     : null;
 
+  const initials = getInitialsFromName(empName);
+  const statusNum = parseInt(String(request.status), 10) || 0;
+  const trackStep3Label = statusNum === 3 ? 'Denied' : statusNum === 4 ? 'Cancelled' : statusNum === 2 ? 'HR Approved' : 'HR decision';
+  const trackStep3Color = statusNum === 3 ? '#C62828' : statusNum === 4 ? '#757575' : undefined;
+  const trackSteps = [
+    { key: 'filed',    label: 'Filed',              state: 'done' },
+    { key: 'review',   label: 'Supervisor review',  state: statusNum === 0 ? 'now' : 'done' },
+    { key: 'decision', label: trackStep3Label,       state: statusNum === 2 ? 'done' : statusNum === 0 ? 'pending' : 'now', color: trackStep3Color },
+  ];
+
+  const renderFact = (label, value, key) => (
+    <Box key={key} sx={{ py: 1.35, borderBottom: `1px solid ${T.divider}` }}>
+      <Typography sx={{ fontSize: '0.68rem', color: T.faint }}>{label}</Typography>
+      <Typography sx={{ fontSize: '0.84rem', fontWeight: 600, color: T.text, mt: 0.3 }}>{value}</Typography>
+    </Box>
+  );
+
   return (
     <Modal open={open} onClose={onClose} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', p: 2 }}>
       <Fade in={open}>
-        <Box sx={{ width: '100%', maxWidth: 980, maxHeight: '92vh', borderRadius: 3, overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.22)', bgcolor: T.surface, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ width: '100%', maxWidth: 980, height: '86vh', maxHeight: 760, borderRadius: 3, overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.22)', bgcolor: T.surface, display: 'flex', flexDirection: 'column' }}>
           {/* Header */}
-          <Box sx={{ px: 3.5, py: 2.5, background: T.headerGrad, display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', overflow: 'hidden', flexShrink: 0 }}>
-            <Box sx={{ position: 'absolute', top: -50, right: -30, width: 180, height: 180, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.04)' }} />
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative', zIndex: 1 }}>
-              <Box sx={{ width: 40, height: 40, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <EventNote sx={{ fontSize: 18, color: '#fff' }} />
-              </Box>
-              <Box>
-                <Typography sx={{ fontWeight: 700, color: '#fff', fontSize: '0.95rem', lineHeight: 1.2, mb: 0.3 }}>Leave Request Details</Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                  <Typography sx={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.68)' }}>#{request.employeeNumber} • {empName}</Typography>
-                  <Chip size="small" icon={<CurrentIcon style={{ fontSize: 10, color: currentOpt.color }} />} label={currentOpt.short}
-                    sx={{ height: 16, fontSize: '0.62rem', bgcolor: alpha(currentOpt.color, 0.15), color: '#fff', fontWeight: 600 }} />
-                </Box>
-              </Box>
+          <Box sx={{ px: 3.5, py: 2.5, bgcolor: T.accentDark, display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+            <Box sx={{ width: 48, height: 48, borderRadius: '50%', bgcolor: 'rgba(255,255,255,0.14)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: '0.95rem', flexShrink: 0 }}>
+              {initials}
             </Box>
-            <IconButton onClick={onClose} size="small" sx={{ color: 'rgba(255,255,255,0.75)', position: 'relative', zIndex: 1, '&:hover': { bgcolor: 'rgba(255,255,255,0.12)' } }}>
-              <Close sx={{ fontSize: 17 }} />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography sx={{ fontWeight: 700, color: '#fff', fontSize: '1.05rem', lineHeight: 1.3 }} noWrap>{empName}</Typography>
+              <Typography sx={{ fontSize: '0.76rem', color: 'rgba(255,255,255,0.7)', mt: 0.2 }}>
+                Leave request · #{request.employeeNumber} · Filed {filedLabel}
+              </Typography>
+            </Box>
+            <Chip size="small" icon={<CurrentIcon style={{ fontSize: 11, color: currentOpt.color }} />} label={currentOpt.short}
+              sx={{ height: 24, fontSize: '0.72rem', fontWeight: 700, bgcolor: currentOpt.bg, color: currentOpt.color, border: `1px solid ${alpha(currentOpt.color, 0.3)}`, flexShrink: 0 }} />
+            <IconButton onClick={onClose} size="small" sx={{ color: 'rgba(255,255,255,0.75)', flexShrink: 0, '&:hover': { bgcolor: 'rgba(255,255,255,0.14)' } }}>
+              <Close sx={{ fontSize: 18 }} />
             </IconButton>
           </Box>
 
           {/* Two-column body */}
-          <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', flexGrow: 1, overflow: 'hidden', minHeight: 0 }}>
-            {/* LEFT: balances (hidden when HR approved) + request info + status */}
-            <Box sx={{ px: 3, py: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0, borderRight: `1px solid ${T.divider}`, '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: T.accentBorder, borderRadius: 2 } }}>
+          <Box sx={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', flexGrow: 1, overflow: 'hidden', minHeight: 0 }}>
+            {/* LEFT: request summary + progress + details + balances */}
+            <Box sx={{ px: 3.5, py: 3, overflowY: 'auto', borderRight: `1px solid ${T.divider}`, '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: T.accentBorder, borderRadius: 2 } }}>
+              {/* Lead */}
+              <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.25, flexWrap: 'wrap', mb: 0.5 }}>
+                <Typography sx={{ fontSize: '1.3rem', fontWeight: 700, color: T.text, lineHeight: 1.25 }}>
+                  {leaveType?.leave_description || request.leave_code}
+                </Typography>
+                <Box sx={{ px: 0.9, py: 0.15, borderRadius: 1, bgcolor: T.accentFaint, border: `1px solid ${T.accentBorder}` }}>
+                  <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, color: T.accent }}>{request.leave_code}</Typography>
+                </Box>
+              </Box>
+              <Typography sx={{ fontSize: '0.82rem', color: T.muted, mb: 2.5 }}>
+                {leaveDates.length} day(s) · {leaveDates.map(formatDate).join(', ')}
+              </Typography>
+
+              {/* Progress track */}
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
+                {trackSteps.flatMap((step, i) => {
+                  const nodes = [];
+                  if (i > 0) {
+                    const prevDone = trackSteps[i - 1].state === 'done';
+                    nodes.push(
+                      <Box key={`bar-${step.key}`} sx={{ flex: 1, minWidth: 16, height: 2, mx: 1, bgcolor: prevDone ? '#2E7D32' : T.divider }} />,
+                    );
+                  }
+                  nodes.push(
+                    <Box key={`step-${step.key}`} sx={{ display: 'flex', alignItems: 'center', gap: 0.6, flexShrink: 0 }}>
+                      <Box sx={{
+                        width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+                        border: `2px solid ${step.state === 'done' ? '#2E7D32' : step.state === 'now' ? (step.color || '#C76A00') : T.accentBorder}`,
+                        bgcolor: step.state === 'done' ? '#2E7D32' : 'transparent',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>
+                        {step.state === 'done' && <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#fff' }} />}
+                      </Box>
+                      <Typography sx={{ fontSize: '0.7rem', fontWeight: step.state === 'now' ? 700 : 500, color: step.state === 'done' ? T.muted : step.state === 'now' ? (step.color || '#C76A00') : T.faint, whiteSpace: 'nowrap' }}>
+                        {step.label}
+                      </Typography>
+                    </Box>,
+                  );
+                  return nodes;
+                })}
+              </Box>
+
+              <Divider sx={{ borderColor: T.divider, mb: 2 }} />
+
+              {/* Request details */}
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: T.accent, mb: 0.5 }}>Request details</Typography>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 3 }}>
+                {renderFact('Employee', <>#{request.employeeNumber}<br />{empName}</>, 'employee')}
+                {renderFact('Employment type', requestInfoMeta.employmentTypeName || '—', 'emptype')}
+                {renderFact(
+                  'Leave date(s)',
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.3 }}>
+                    {leaveDates.map((d) => (
+                      <Box key={d} sx={{ px: 0.9, py: 0.15, borderRadius: 1, bgcolor: T.accentFaint, border: `1px solid ${T.accentBorder}` }}>
+                        <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, color: T.accent }}>{formatDate(d)}</Typography>
+                      </Box>
+                    ))}
+                  </Box>,
+                  'dates',
+                )}
+                {requestInfoMeta.officialTime && renderFact(
+                  'Official time',
+                  `${formatOfficialTimeShort(requestInfoMeta.officialTime.timeIn)} – ${formatOfficialTimeShort(requestInfoMeta.officialTime.timeOut)}`,
+                  'officialtime',
+                )}
+              </Box>
+
+              <Divider sx={{ borderColor: T.divider, my: 2.5 }} />
+
+              {/* Balances / locked note */}
               {isHrApprovedLocked ? (
-                <>
-                  <FormSectionLabel icon={ScheduleIcon}>Status</FormSectionLabel>
-                  <Box sx={{ p: 2, borderRadius: 2, border: `1px solid ${alpha('#2E7D32', 0.25)}`, bgcolor: alpha('#2E7D32', 0.04), display: 'flex', alignItems: 'flex-start', gap: 1.5, mb: 2 }}>
-                    <Box sx={{ width: 32, height: 32, borderRadius: '50%', bgcolor: alpha('#2E7D32', 0.12), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <LockIcon sx={{ fontSize: 15, color: '#2E7D32' }} />
-                    </Box>
-                    <Box>
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#2E7D32', mb: 0.3 }}>
-                        {lockedMessages['2']?.title}
-                      </Typography>
-                      <Typography sx={{ fontSize: '0.76rem', color: T.muted, lineHeight: 1.55 }}>
-                        {lockedMessages['2']?.body}
-                      </Typography>
-                    </Box>
+                <Box sx={{ p: 2, borderRadius: 2, border: `1px solid ${alpha('#2E7D32', 0.25)}`, bgcolor: alpha('#2E7D32', 0.05), display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+                  <CheckCircle sx={{ fontSize: 18, color: '#2E7D32', flexShrink: 0, mt: 0.15 }} />
+                  <Box>
+                    <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: '#2E7D32', mb: 0.3 }}>{lockedMessages['2']?.title}</Typography>
+                    <Typography sx={{ fontSize: '0.76rem', color: T.muted, lineHeight: 1.55 }}>{lockedMessages['2']?.body}</Typography>
                   </Box>
-                  <Divider sx={{ borderColor: T.divider, mb: 2 }} />
-                </>
+                </Box>
               ) : (
                 <>
-                  <FormSectionLabel icon={WalletIcon}>Leave Balances</FormSectionLabel>
+                  <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: T.accent, mb: 1.25 }}>Current leave balances</Typography>
                   {balancesLoading ? (
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1, mb: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
                       <CircularProgress size={14} sx={{ color: T.accent }} />
                       <Typography sx={{ fontSize: '0.75rem', color: T.muted }}>Loading balances…</Typography>
                     </Box>
                   ) : allBalances.length === 0 ? (
-                    <Box sx={{ py: 2, textAlign: 'center', border: `1px dashed ${T.accentBorder}`, borderRadius: 2, mb: 2 }}>
+                    <Box sx={{ py: 2, textAlign: 'center', border: `1px dashed ${T.accentBorder}`, borderRadius: 2 }}>
                       <Typography sx={{ fontSize: '0.78rem', color: T.faint }}>No leave balance data available.</Typography>
                     </Box>
                   ) : (
-                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: 0.65, mb: 0.75 }}>
+                    <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1 }}>
                       {allBalances.map((b) => (
-                        <LeaveBalanceCard key={b.code} balance={b} isActive={b.code === request.leave_code} />
+                        <LeaveBalanceCard
+                          key={b.code}
+                          balance={b}
+                          isActive={b.code === (hrApproveModal.chargeTo || request.leave_code)}
+                          onSelect={(code) => setHrApproveModal((p) => ({ ...p, chargeTo: code }))}
+                          disabled={String(localStatus) === '3'}
+                        />
                       ))}
                     </Box>
                   )}
-                  <Typography sx={{ fontSize: '0.68rem', color: T.faint, mb: 2 }}>
-                    * Balances shown are current remaining. Deduction applied on HR approval.
+                  <Typography sx={{ fontSize: '0.68rem', color: T.faint, mt: 1.25 }}>
+                    Balances are current remaining. Deduction is applied on HR approval.
                   </Typography>
-                  <Divider sx={{ borderColor: T.divider, mb: 2 }} />
                 </>
               )}
-
-              <FormSectionLabel icon={EventNote}>Request Info</FormSectionLabel>
-              <Grid container spacing={1.25} sx={{ mb: 2 }}>
-                {!isHrApprovedLocked && (
-                  <Grid item xs={12}>
-                    <Box sx={{ p: 1.5, bgcolor: T.accentFaint, borderRadius: 2, border: `1px solid ${T.accentBorder}` }}>
-                      <Typography sx={{ fontSize: '0.7rem', color: T.muted, mb: 0.5 }}>Employee</Typography>
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: T.accent }}>#{request.employeeNumber}</Typography>
-                      <Typography sx={{ fontSize: '0.72rem', color: T.muted }}>{empName}</Typography>
-                    </Box>
-                  </Grid>
-                )}
-                <Grid item xs={6}>
-                  <Box sx={{ p: 1.5, bgcolor: T.accentFaint, borderRadius: 2, border: `1px solid ${T.accentBorder}` }}>
-                    <Typography sx={{ fontSize: '0.7rem', color: T.muted, mb: 0.5 }}>Leave type</Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                      <Box sx={{ px: 0.85, py: 0.2, borderRadius: 1, bgcolor: 'rgba(109,35,35,0.08)', border: `0.5px solid ${T.accentBorder}` }}>
-                        <Typography sx={{ fontSize: '0.68rem', fontWeight: 800, color: T.accent }}>{request.leave_code}</Typography>
-                      </Box>
-                      <Typography sx={{ fontSize: '0.78rem', fontWeight: 600, color: T.text }}>{leaveType?.leave_description || request.leave_code}</Typography>
-                    </Box>
-                  </Box>
-                </Grid>
-                {!isHrApprovedLocked && (
-                  <Grid item xs={6}>
-                    <Box sx={{ p: 1.5, bgcolor: T.accentFaint, borderRadius: 2, border: `1px solid ${T.accentBorder}` }}>
-                      <Typography sx={{ fontSize: '0.7rem', color: T.muted, mb: 0.5 }}>Duration</Typography>
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: T.text }}>{leaveDates.length} day(s)</Typography>
-                    </Box>
-                  </Grid>
-                )}
-                <Grid item xs={isHrApprovedLocked ? 12 : 12}>
-                  <Box sx={{ p: 1.5, bgcolor: T.accentFaint, borderRadius: 2, border: `1px solid ${T.accentBorder}` }}>
-                    <Typography sx={{ fontSize: '0.7rem', color: T.muted, mb: 0.5 }}>{isHrApprovedLocked ? 'Leave date' : 'Leave date(s)'}</Typography>
-                    {isHrApprovedLocked && leaveDates.length === 1 ? (
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: T.text }}>{formatDate(leaveDates[0])}</Typography>
-                    ) : (
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
-                        {leaveDates.map((d) => (
-                          <Box key={d} sx={{ px: 1, py: 0.35, borderRadius: 1, bgcolor: 'rgba(109,35,35,0.08)', border: `0.5px solid ${T.accentBorder}` }}>
-                            <Typography sx={{ fontSize: '0.72rem', fontWeight: 600, color: T.accent }}>{formatDate(d)}</Typography>
-                          </Box>
-                        ))}
-                      </Box>
-                    )}
-                  </Box>
-                </Grid>
-                {!isHrApprovedLocked && (
-                  <Grid item xs={6}>
-                    <Box sx={{ p: 1.5, bgcolor: T.accentFaint, borderRadius: 2, border: `1px solid ${T.accentBorder}` }}>
-                      <Typography sx={{ fontSize: '0.7rem', color: T.muted, mb: 0.5 }}>Filed on</Typography>
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: T.text }}>{filedLabel}</Typography>
-                    </Box>
-                  </Grid>
-                )}
-                <Grid item xs={isHrApprovedLocked ? 12 : 6}>
-                  <Box sx={{ p: 1.5, bgcolor: T.accentFaint, borderRadius: 2, border: `1px solid ${T.accentBorder}` }}>
-                    <Typography sx={{ fontSize: '0.7rem', color: T.muted, mb: 0.5 }}>Employment type</Typography>
-                    <Typography sx={{ fontSize: '0.82rem', fontWeight: 600, color: T.text }}>{hrApproveModal.employmentTypeName || '—'}</Typography>
-                  </Box>
-                </Grid>
-              </Grid>
-
-              {!isHrApprovedLocked && (
-                <>
-                  <Divider sx={{ borderColor: T.divider, mb: 2 }} />
-                  <FormSectionLabel icon={ScheduleIcon}>Status</FormSectionLabel>
-                </>
-              )}
-              {isLocked && !isHrApprovedLocked ? (
-                <>
-                  <Box sx={{ p: 2, borderRadius: 2, border: `1px solid ${alpha(lockedMessages[String(request.status)]?.color || '#757575', 0.25)}`, bgcolor: alpha(lockedMessages[String(request.status)]?.color || '#757575', 0.05), display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
-                    <Box sx={{ width: 32, height: 32, borderRadius: '50%', bgcolor: alpha(lockedMessages[String(request.status)]?.color || '#757575', 0.12), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <LockIcon sx={{ fontSize: 15, color: lockedMessages[String(request.status)]?.color || '#757575' }} />
-                    </Box>
-                    <Box>
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: lockedMessages[String(request.status)]?.color || '#757575', mb: 0.3 }}>
-                        {lockedMessages[String(request.status)]?.title}
-                      </Typography>
-                      <Typography sx={{ fontSize: '0.76rem', color: T.muted, lineHeight: 1.55 }}>
-                        {lockedMessages[String(request.status)]?.body}
-                      </Typography>
-                    </Box>
-                  </Box>
-                </>
-              ) : !isLocked ? (
-                <>
-                  <Box sx={{ p: 1.75, borderRadius: 2, bgcolor: T.accentFaint, border: `1px solid ${T.accentBorder}`, mb: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
-                    <Typography sx={{ fontSize: '0.72rem', color: T.muted, fontWeight: 600, flexShrink: 0 }}>Current status</Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 1, minWidth: 0 }}>
-                      <CurrentIcon sx={{ fontSize: 16, color: currentOpt.color, flexShrink: 0 }} />
-                      <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: currentOpt.color, textAlign: 'right' }}>{currentOpt.label}</Typography>
-                    </Box>
-                  </Box>
-                  <Typography sx={{ fontSize: '0.75rem', fontWeight: 600, color: T.accent, mb: 0.75 }}>Update status</Typography>
-                  <FormControl fullWidth size="small">
-                    <Select value={localStatus} onChange={(e) => setLocalStatus(e.target.value)} sx={selectSx}
-                      renderValue={(v) => {
-                        const opt = allStatusOptions.find((o) => o.value === v);
-                        const Icon = opt?.icon;
-                        return (
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            {Icon && <Icon sx={{ fontSize: 14, color: opt.color }} />}
-                            <Typography sx={{ fontWeight: 600, color: opt?.color, fontSize: '0.875rem' }}>{opt?.label}</Typography>
-                          </Box>
-                        );
-                      }}>
-                      {statusOptions.map((o) => (
-                        <MenuItem key={o.value} value={o.value} sx={{ py: 1.25 }}>
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                            <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: o.color }} />
-                            <Typography sx={{ fontSize: '0.875rem' }}>{o.label}</Typography>
-                          </Box>
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </>
-              ) : null}
             </Box>
 
-            {/* RIGHT: HR deduction transaction card, approval panel, or empty state */}
-            <Box sx={{ px: 3, py: 2.5, overflowY: 'auto', display: 'flex', flexDirection: 'column', bgcolor: isHrApprovedLocked ? '#fafafa' : 'transparent', '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: T.accentBorder, borderRadius: 2 } }}>
+            {/* RIGHT: HR decision — status control + deduction / locked / empty state */}
+            <Box sx={{ px: 3.5, py: 3, overflowY: 'auto', display: 'flex', flexDirection: 'column', bgcolor: T.accentFaint, '&::-webkit-scrollbar': { width: 4 }, '&::-webkit-scrollbar-thumb': { bgcolor: T.accentBorder, borderRadius: 2 } }}>
+              <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: T.accent, mb: 1.5 }}>HR decision</Typography>
+
+              {!isLocked && (
+                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 0.5, bgcolor: '#fff', border: `1px solid ${T.accentBorder}`, borderRadius: 2.5, p: 0.5, mb: 2.5 }}>
+                  {statusOptions.map((o) => {
+                    const active = localStatus === o.value;
+                    return (
+                      <Box key={o.value} component="button" type="button" onClick={() => setLocalStatus(o.value)}
+                        sx={{
+                          border: 0, cursor: 'pointer', borderRadius: 2, py: 1, px: 0.5, fontSize: '0.66rem', fontWeight: 700, fontFamily: 'inherit',
+                          bgcolor: active ? o.bg : 'transparent', color: active ? o.color : T.muted,
+                          transition: 'background-color 0.15s, color 0.15s',
+                          '&:hover': { bgcolor: active ? o.bg : T.accentFaint },
+                        }}>
+                        {o.short}
+                      </Box>
+                    );
+                  })}
+                </Box>
+              )}
+
               {isHrApprovedLocked ? (
                 <>
-                  <FormSectionLabel icon={TrendingDownIcon}>HR deduction applied</FormSectionLabel>
                   {hasDeductionRecord ? (
                     <HrDeductionAppliedCard request={request} leaveTypes={leaveTypes} chargeTypeDesc={chargeTypeDesc} />
                   ) : (
-                    <Box sx={{ p: 2, borderRadius: 2, border: `1px dashed ${T.accentBorder}`, bgcolor: '#fff', mb: 2 }}>
+                    <Box sx={{ p: 2, borderRadius: 2, border: `1px dashed ${T.accentBorder}`, bgcolor: '#fff' }}>
                       <Typography sx={{ fontSize: '0.78rem', color: T.muted, lineHeight: 1.55 }}>
                         HR approved with no deduction record stored on this request.
                       </Typography>
                     </Box>
                   )}
-                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, textAlign: 'center', px: 2, py: 3, opacity: 0.45, mt: 1 }}>
-                    <Typography sx={{ fontSize: '0.78rem', color: '#bbb', lineHeight: 1.6 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, textAlign: 'center', px: 2, py: 3, opacity: 0.5 }}>
+                    <Typography sx={{ fontSize: '0.78rem', color: T.faint, lineHeight: 1.6 }}>
                       No further actions available.
                       <br />
                       This record is locked.
                     </Typography>
                   </Box>
                 </>
+              ) : isLocked ? (
+                <Box sx={{ p: 2, borderRadius: 2, border: `1px solid ${alpha(lockedMessages[String(request.status)]?.color || '#757575', 0.25)}`, bgcolor: alpha(lockedMessages[String(request.status)]?.color || '#757575', 0.06), display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
+                  <Box sx={{ width: 32, height: 32, borderRadius: '50%', bgcolor: alpha(lockedMessages[String(request.status)]?.color || '#757575', 0.14), display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                    <LockIcon sx={{ fontSize: 15, color: lockedMessages[String(request.status)]?.color || '#757575' }} />
+                  </Box>
+                  <Box>
+                    <Typography sx={{ fontSize: '0.82rem', fontWeight: 700, color: lockedMessages[String(request.status)]?.color || '#757575', mb: 0.3 }}>
+                      {lockedMessages[String(request.status)]?.title}
+                    </Typography>
+                    <Typography sx={{ fontSize: '0.76rem', color: T.muted, lineHeight: 1.55 }}>
+                      {lockedMessages[String(request.status)]?.body}
+                    </Typography>
+                    {String(request.status) === '3' && request.denial_reason && (
+                      <Box sx={{ mt: 1, p: 1.25, borderRadius: 1.5, bgcolor: '#fff', border: `1px solid ${alpha('#C62828', 0.18)}` }}>
+                        <Typography sx={{ fontSize: '0.66rem', fontWeight: 700, color: '#C62828', textTransform: 'uppercase', letterSpacing: '0.04em', mb: 0.35 }}>Reason</Typography>
+                        <Typography sx={{ fontSize: '0.78rem', color: T.text, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{request.denial_reason}</Typography>
+                      </Box>
+                    )}
+                  </Box>
+                </Box>
+              ) : isDenyFlow ? (
+                <Box sx={{ bgcolor: '#fff', border: `1px solid ${T.accentBorder}`, borderRadius: 3, p: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.25 }}>
+                    <CancelIcon sx={{ fontSize: 15, color: '#C62828' }} />
+                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#C62828' }}>Reason for denial</Typography>
+                  </Box>
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={4}
+                    placeholder="Tell the employee why this request is being denied."
+                    value={denialReason}
+                    onChange={(e) => setDenialReason(e.target.value)}
+                    sx={{ '& .MuiOutlinedInput-root': { borderRadius: 2, fontSize: '0.85rem', bgcolor: '#fff', '& fieldset': { borderColor: T.accentBorder }, '&:hover fieldset': { borderColor: T.accent }, '&.Mui-focused fieldset': { borderColor: T.accent, borderWidth: 1.5 } } }}
+                  />
+                  <Typography sx={{ fontSize: '0.7rem', color: T.faint, mt: 1 }}>
+                    This is shown to the employee and no balance is deducted for denied requests.
+                  </Typography>
+                </Box>
               ) : isHrApprovalFlow ? (
-                <>
-                  <FormSectionLabel icon={DoneAllIcon}>Set Deduction</FormSectionLabel>
-                  <Box sx={{ p: 2, borderRadius: 2, border: `1px solid ${alpha('#2E7D32', 0.3)}`, bgcolor: alpha('#2E7D32', 0.04), mb: 2 }}>
-                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#2E7D32', mb: 0.5 }}>HR Approval — configure leave deduction</Typography>
-                    <Typography sx={{ fontSize: '0.73rem', color: T.muted, lineHeight: 1.55 }}>Set the charge-to balance, hours per day, and review the computed total before confirming.</Typography>
+                <Box sx={{ bgcolor: '#fff', border: `1px solid ${T.accentBorder}`, borderRadius: 3, p: 2 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
+                    <DoneAllIcon sx={{ fontSize: 15, color: '#2E7D32' }} />
+                    <Typography sx={{ fontSize: '0.78rem', fontWeight: 700, color: '#2E7D32' }}>Charge this leave to</Typography>
                   </Box>
                   {hrApproveModal.loadingContext ? (
-                    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flexGrow: 1, py: 6 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', py: 6 }}>
                       <CircularProgress size={28} sx={{ color: T.accent }} />
                     </Box>
                   ) : (
                     <HrDeductionPanel modal={hrModalWithCharge} setModal={setHrApproveModal} disabled={hrApproveModal.loading} balances={hrBalancesForPanel} />
                   )}
-                </>
+                </Box>
               ) : (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, textAlign: 'center', gap: 1.5, px: 3, py: 4 }}>
-                  <Box sx={{ width: 60, height: 60, borderRadius: '50%', bgcolor: T.accentFaint, border: `1px solid ${T.accentBorder}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <LockIcon sx={{ fontSize: 26, color: alpha(T.accent, 0.3) }} />
+                <Box sx={{ bgcolor: '#fff', border: `1px solid ${T.accentBorder}`, borderRadius: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flexGrow: 1, textAlign: 'center', gap: 1, px: 3, py: 4 }}>
+                  <Box sx={{ width: 52, height: 52, borderRadius: '50%', bgcolor: T.accentFaint, border: `1px solid ${T.accentBorder}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <LockIcon sx={{ fontSize: 22, color: alpha(T.accent, 0.35) }} />
                   </Box>
-                  <Box>
-                    <Typography sx={{ fontSize: '0.88rem', fontWeight: 700, color: T.muted, mb: 0.5 }}>No deduction required</Typography>
-                    <Typography sx={{ fontSize: '0.78rem', color: T.faint, lineHeight: 1.65 }}>
-                      Set the status to{' '}
-                      <Box component="span" sx={{ fontWeight: 700, color: '#2E7D32' }}>HR Approved</Box>
-                      {' '}on the left to configure the leave deduction.
-                    </Typography>
-                  </Box>
+                  <Typography sx={{ fontSize: '0.86rem', fontWeight: 700, color: T.text, mt: 0.5 }}>No deduction yet</Typography>
+                  <Typography sx={{ fontSize: '0.78rem', color: T.faint, lineHeight: 1.6 }}>
+                    Choose <Box component="span" sx={{ fontWeight: 700, color: '#2E7D32' }}>HR Approved</Box> above to set how this leave is charged.
+                  </Typography>
                 </Box>
               )}
             </Box>
           </Box>
 
           {/* Footer */}
-          <Box sx={{ px: 3.5, py: 2, borderTop: `1px solid ${T.divider}`, bgcolor: '#f9f9f9', display: 'flex', justifyContent: 'flex-end', gap: 1.25, flexShrink: 0 }}>
-            <AccentButton onClick={onClose} variant="outlined" sx={{ fontSize: '0.8rem', borderColor: T.accentBorder, color: T.muted, '&:hover': { bgcolor: T.accentFaint, borderColor: T.accent, color: T.accent } }}>Close</AccentButton>
-            {!isLocked && (
-              <AccentButton
-                onClick={() => (isHrApprovalFlow ? onConfirmHrApprove() : onStatusUpdate(request, localStatus))}
-                disabled={!statusChanged || statusUpdating || (isHrApprovalFlow && (hrApproveModal.loadingContext || hrApproveModal.loading))}
-                variant="contained"
-                startIcon={
-                  statusUpdating || (isHrApprovalFlow && hrApproveModal.loading)
-                    ? <CircularProgress size={12} sx={{ color: '#fff' }} />
-                    : isHrApprovalFlow ? <DoneAllIcon sx={{ fontSize: '14px !important' }} /> : <SaveIcon sx={{ fontSize: '14px !important' }} />
-                }
-                sx={{ fontSize: '0.8rem', bgcolor: isHrApprovalFlow ? '#2E7D32' : T.accent, color: '#fff', boxShadow: `0 2px 10px ${alpha(isHrApprovalFlow ? '#2E7D32' : T.accent, 0.32)}`, '&:hover': { bgcolor: isHrApprovalFlow ? '#1B5E20' : T.accentDark }, '&:disabled': { bgcolor: '#ddd' } }}>
-                {statusUpdating || (isHrApprovalFlow && hrApproveModal.loading) ? 'Saving…' : isHrApprovalFlow ? 'Confirm HR approval' : 'Save Status'}
-              </AccentButton>
-            )}
+          <Box sx={{ px: 3.5, py: 2, borderTop: `1px solid ${T.divider}`, bgcolor: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexShrink: 0 }}>
+            <Typography sx={{ fontSize: '0.75rem', color: denialReasonMissing ? '#C62828' : T.faint }}>
+              {isLocked ? 'This record is locked.' : denialReasonMissing ? 'A reason is required to deny this request.' : statusChanged ? 'Saving will notify the employee.' : 'Change the status to save.'}
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1.25 }}>
+              <AccentButton onClick={onClose} variant="outlined" sx={{ fontSize: '0.8rem', borderColor: T.accentBorder, color: T.muted, '&:hover': { bgcolor: T.accentFaint, borderColor: T.accent, color: T.accent } }}>Close</AccentButton>
+              {!isLocked && (
+                <AccentButton
+                  onClick={() => (isHrApprovalFlow ? onConfirmHrApprove() : onStatusUpdate(request, localStatus, denialReason))}
+                  disabled={!statusChanged || statusUpdating || denialReasonMissing || (isHrApprovalFlow && (hrApproveModal.loadingContext || hrApproveModal.loading))}
+                  variant="contained"
+                  startIcon={
+                    statusUpdating || (isHrApprovalFlow && hrApproveModal.loading)
+                      ? <CircularProgress size={12} sx={{ color: '#fff' }} />
+                      : isHrApprovalFlow ? <DoneAllIcon sx={{ fontSize: '14px !important' }} /> : <SaveIcon sx={{ fontSize: '14px !important' }} />
+                  }
+                  sx={{ fontSize: '0.8rem', bgcolor: isHrApprovalFlow ? '#2E7D32' : T.accent, color: '#fff', boxShadow: `0 2px 10px ${alpha(isHrApprovalFlow ? '#2E7D32' : T.accent, 0.32)}`, '&:hover': { bgcolor: isHrApprovalFlow ? '#1B5E20' : T.accentDark }, '&:disabled': { bgcolor: '#ddd' } }}>
+                  {statusUpdating || (isHrApprovalFlow && hrApproveModal.loading) ? 'Saving…' : isHrApprovalFlow ? 'Confirm HR approval' : 'Save Status'}
+                </AccentButton>
+              )}
+            </Box>
           </Box>
         </Box>
       </Fade>
@@ -1728,7 +1828,9 @@ const LeaveRequest = () => {
     try {
       const patch = await loadHrApproveModalData(req.employeeNumber, req.leave_code, req.leave_date);
       if (hrViewLoadSeq.current !== n) return;
-      setHrApproveModal((p) => ({ ...p, ...patch }));
+      // Preserve a charge-to balance the user already picked (e.g. by clicking a
+      // balance card) instead of letting the fetched system suggestion overwrite it.
+      setHrApproveModal((p) => ({ ...p, ...patch, chargeTo: p.chargeTo || patch.chargeTo }));
     } catch (e) {
       if (hrViewLoadSeq.current === n) {
         showError('Context Failed', e.response?.data?.error || e.message);
@@ -1942,26 +2044,25 @@ const LeaveRequest = () => {
     });
   };
 
-  const handleStatusUpdate = async (req, newStatus) => {
-    const statusObj = allStatusOptions.find((o) => o.value === String(newStatus));
-    showConfirm({
-      title: 'Confirm Status Update',
-      message: `Update this request to "${statusObj?.label}"?`,
-      confirmLabel: 'Update Status',
-      confirmColor: statusObj?.color || T.accent, confirmHoverColor: alpha(statusObj?.color || T.accent, 0.8),
-      icon: statusObj?.icon || HelpOutlineIcon, iconColor: statusObj?.color || T.accent, iconBg: statusObj?.bg || T.accentFaint,
-      onConfirm: async () => {
-        setConfirmModal((p) => ({ ...p, loading: true }));
-        setStatusUpdating(true);
-        try {
-          await axios.put(`${API_BASE_URL}/leaveRoute/leave_request/${req.id}`, { employeeNumber: req.employeeNumber, leave_code: req.leave_code, leave_date: req.leave_date, status: Number(newStatus) }, getAuthHeaders());
-          setViewRequest(null);
-          setSuccessAction('status'); setSuccessOpen(true); setTimeout(() => setSuccessOpen(false), 2000);
-          fetchAll();
-        } catch { showError('Update Failed', 'Could not update status. Please try again.'); }
-        finally { setStatusUpdating(false); closeConfirm(); }
-      },
-    });
+  // Saved directly from the ViewModal (selecting a status + clicking "Save Status" is
+  // already the deliberate confirming action — no need for a second "are you sure?" modal).
+  // Validation (denial reason, admin-only, etc.) still applies on both sides.
+  const handleStatusUpdate = async (req, newStatus, denialReason = '') => {
+    if (String(newStatus) === '3' && !String(denialReason || '').trim()) {
+      showError('Reason required', 'Please provide a reason for denying this request.');
+      return;
+    }
+    setStatusUpdating(true);
+    try {
+      await axios.put(`${API_BASE_URL}/leaveRoute/leave_request/${req.id}`, {
+        employeeNumber: req.employeeNumber, leave_code: req.leave_code, leave_date: req.leave_date, status: Number(newStatus),
+        denial_reason: String(newStatus) === '3' ? String(denialReason || '').trim() : undefined,
+      }, getAuthHeaders());
+      setViewRequest(null);
+      setSuccessAction('status'); setSuccessOpen(true); setTimeout(() => setSuccessOpen(false), 2000);
+      fetchAll();
+    } catch (e) { showError('Update Failed', e.response?.data?.error || 'Could not update status. Please try again.'); }
+    finally { setStatusUpdating(false); }
   };
 
   const confirmHrApprove = async () => {

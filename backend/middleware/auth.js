@@ -1,5 +1,26 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const db = require('../db');
+
+/**
+ * Single shared JWT secret for the whole backend (auth.js signing, this file's
+ * verification, socketServer.js, and the dashboardRoutes JWT checks all import
+ * this instead of each hardcoding their own 'secret' literal fallback — a
+ * hardcoded, publicly-known fallback lets anyone forge a valid token, including
+ * an arbitrary role/employeeNumber, if JWT_SECRET is ever left unset).
+ * If JWT_SECRET is missing, fall back to one random secret generated once per
+ * process (shared via this export) rather than a known string — this still
+ * invalidates sessions on restart and won't work across multiple instances, so
+ * it's a safety net, not a substitute for setting JWT_SECRET.
+ */
+const JWT_SECRET = process.env.JWT_SECRET || (() => {
+  console.error(
+    '[auth] WARNING: JWT_SECRET is not set. Falling back to a random per-process ' +
+    'secret — sessions will be invalidated on every restart and will not work across ' +
+    'multiple server instances. Set JWT_SECRET in backend/.env immediately.',
+  );
+  return crypto.randomBytes(48).toString('hex');
+})();
 const {
   broadcastNewAuditLog,
   broadcastNewAdminActionTrail,
@@ -213,7 +234,7 @@ function authenticateToken(req, res, next) {
     return res.status(401).json({ error: 'No token provided' });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET || 'secret', (err, user) => {
+  jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid token' });
     }
@@ -597,6 +618,7 @@ function insertAuditLog(employeeNumber, action) {
 }
 
 module.exports = {
+  JWT_SECRET,
   authenticateToken,
   requireRoles,
   requireAdmin,

@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const transporter = require('../config/email');
 const { twoFACodes } = require('../utils/verificationCodes');
+const { JWT_SECRET } = require('../middleware/auth');
 
 // LOGIN
 router.post('/login', (req, res) => {
@@ -247,7 +248,7 @@ router.post('/complete-2fa-login', (req, res) => {
         lastName: user.lastName,
         nameExtension: user.nameExtension,
       },
-      process.env.JWT_SECRET || 'secret',
+      JWT_SECRET,
       { expiresIn: '10h' }
     );
 

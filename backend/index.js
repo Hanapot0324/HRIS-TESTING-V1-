@@ -340,6 +340,12 @@ db.query(ensureHolidayTableSQL, (err) => {
   }
 });
 
+// Leave requests: reason text captured when HR denies a request
+db.query('ALTER TABLE leave_request ADD COLUMN denial_reason TEXT NULL', (err) => {
+  if (err && err.code !== 'ER_DUP_FIELDNAME')
+    console.error('Leave request migration denial_reason:', err.message);
+});
+
 // Announcements: Date Range for carousel visibility
 [
   'ALTER TABLE announcements ADD COLUMN date_start DATE NULL',

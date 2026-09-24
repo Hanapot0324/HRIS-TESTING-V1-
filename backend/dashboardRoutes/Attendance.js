@@ -6,7 +6,7 @@
   const {
     getLatestAttendanceRecordInfo,
   } = require('../socket/attendanceRecordInfoSocketApi');
-  const { logAudit } = require('../middleware/auth');
+  const { logAudit, JWT_SECRET } = require('../middleware/auth');
   const { syncAggregatedDeviceDays } = require('../services/deviceAttendanceSyncService');
 
   function authenticateToken(req, res, next) {
@@ -15,7 +15,7 @@
 
     if (!token) return res.status(401).json({ error: 'No token provided' });
 
-    jwt.verify(token, process.env.JWT_SECRET || 'secret', (err, user) => {
+    jwt.verify(token, JWT_SECRET, (err, user) => {
       if (err) {
         return res.status(403).json({ error: 'Invalid token' });
       }

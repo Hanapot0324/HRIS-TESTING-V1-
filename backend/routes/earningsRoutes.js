@@ -2119,7 +2119,19 @@ router.patch("/leave/:id/approve", authenticateToken, requireAdmin, (req, res) =
             if (!matched) throw new Error("Could not find or create assignment for earning period");
 
             const repaired = await repairPeriodCarryForwardIfEmpty(db, matched);
-            const recomputed = await recomputeAssignmentLedgerFields(db, repaired);
+            // BUGFIX: recomputeAssignmentLedgerFields only derives total/remaining from the
+            // assignment's EXISTING allocated_hours — it never added the earning being
+            // approved right now. That made every positive-earning approval a no-op (or, if
+            // repairPeriodCarryForwardIfEmpty rewrote carried_forward_hours in the same call,
+            // an actual regression) on the employee's real, spendable balance — confirmed
+            // against production transaction_table history (e.g. "Balance updated: 48.000
+            // hrs -> 48.000 hrs (+10.000 hrs)"). Fold the approved amount into allocated_hours
+            // BEFORE recomputing so it actually lands in the stored/spendable balance.
+            const withEarning = {
+              ...repaired,
+              allocated_hours: toNum(repaired.allocated_hours) + earnedHrs,
+            };
+            const recomputed = await recomputeAssignmentLedgerFields(db, withEarning);
             await new Promise((resolve, reject) => {
               db.query(
                 `UPDATE leave_assignment SET
@@ -2143,6 +2155,18 @@ router.patch("/leave/:id/approve", authenticateToken, requireAdmin, (req, res) =
                 ],
                 (e) => (e ? reject(e) : resolve()),
               );
+            });
+            // If later periods already exist (out-of-order approval — e.g. a missed month
+            // approved after next month's assignment row was already created), their opening
+            // balance was carried forward from THIS period's pre-earning total. Bump them too
+            // so the running ledger chain stays correct instead of silently under-crediting
+            // forward. (This function already existed but was never called anywhere.)
+            await propagateEarnedHoursToLaterPeriods({
+              employeeNumber: rec.employee_number,
+              leaveCode: rec.leave_code,
+              periodYear: rec.period_year,
+              periodMonth,
+              earnedHours: earnedHrs,
             });
             await afterUpdate();
           } else {
@@ -2967,6 +2991,29 @@ router.patch("/leave/:id/approve", authenticateToken, requireAdmin, (req, res) =
               } catch (e) {
                 console.error("[earnings] SC approve earning_status refresh:", e.message);
               }
+
+              // BUGFIX: for the positive-earn path, balAfterHrs must be read AFTER
+              // earn_status flips to 'approved' above — computeScBalances only sums
+              // APPROVED sc_earnings rows, so reading it any earlier always produced the
+              // same value as balBeforeHrs even though the credit itself is (and always
+              // was) correctly counted from this point on. Confirmed against production
+              // transaction_table history: every positive SC-earning approval logged an
+              // unchanged "before -> after" balance despite a nonzero delta. The deduction
+              // path already supplies its own accurate balAfterHrs from its own ledger
+              // snapshot (applyScDeductionLedger) and is left untouched here.
+              if (finalizeArgs.balAfterHrs == null) {
+                try {
+                  const freshTotals = await new Promise((resolve, reject) => {
+                    getServiceCreditRunningTotals(rec.employee_number, scType, (e2, t) =>
+                      e2 ? reject(e2) : resolve(t),
+                    );
+                  });
+                  finalizeArgs = { ...finalizeArgs, balAfterHrs: toNum(freshTotals?.remaining) };
+                } catch (e) {
+                  console.error("[earnings] SC approve post-approval balance read:", e.message);
+                }
+              }
+
               runScApproveFinalize(finalizeArgs);
             })();
           },
@@ -3004,20 +3051,16 @@ router.patch("/leave/:id/approve", authenticateToken, requireAdmin, (req, res) =
           try {
             await ensureScPeriodRow(rec);
 
-            getServiceCreditRunningTotals(rec.employee_number, scType, (err4, curAfter) => {
-              if (err4) {
-                return res.status(500).json({ error: "Failed to read balance after approval" });
-              }
-              const balAfter = toNum(curAfter.remaining);
-              markScEarningApprovedThenFinalize({
-                isScDeduction: false,
-                needScHrs: 0,
-                scShortfallHrs: 0,
-                scNegBalDays: 0,
-                balBeforeHrs: balBefore,
-                balAfterHrs: balAfter,
-                balDeltaHrs: earnedHrs,
-              });
+            // balAfterHrs is intentionally omitted here — markScEarningApprovedThenFinalize
+            // reads it fresh right after earn_status actually flips to 'approved', since
+            // computeScBalances only counts approved sc_earnings (see BUGFIX comment there).
+            markScEarningApprovedThenFinalize({
+              isScDeduction: false,
+              needScHrs: 0,
+              scShortfallHrs: 0,
+              scNegBalDays: 0,
+              balBeforeHrs: balBefore,
+              balDeltaHrs: earnedHrs,
             });
           } catch (e) {
             console.error("[earnings] SC approve period refresh:", e);

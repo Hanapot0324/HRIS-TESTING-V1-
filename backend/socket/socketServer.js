@@ -1,5 +1,6 @@
 const socketIO = require('socket.io');
 const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../middleware/auth');
 
 let io;
 
@@ -53,7 +54,7 @@ function initializeSocket(server) {
     }
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+      const decoded = jwt.verify(token, JWT_SECRET);
       socket.userId = decoded.employeeNumber;
       socket.userRole = decoded.role;
       socket.username = decoded.username;

@@ -2,7 +2,7 @@
 const db      = require('../db');
 const express = require('express');
 const router  = express.Router();
-const { authenticateToken, requireAdmin, logAudit } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireSelfOrAdmin, logAudit } = require('../middleware/auth');
 const { getServiceCreditRunningTotals, getScEmployeeDisplayRemainingAsync } = require('../services/serviceCreditRunningTotals');
 const {
   recomputeScLedgerFields,
@@ -190,7 +190,7 @@ router.get('/ot-types', (req, res) => {
 });
  
 // ─── GET /service_credit ─────────────────────────────────────────────────────
-router.get('/service_credit', (req, res) => {
+router.get('/service_credit', authenticateToken, requireAdmin, (req, res) => {
   const empFilter = String(req.query.employeeNumber || '').trim();
   const params = [];
   let q = `

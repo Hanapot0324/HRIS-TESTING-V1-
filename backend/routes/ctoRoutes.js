@@ -2,7 +2,7 @@
 const db      = require('../db');
 const express = require('express');
 const router  = express.Router();
-const { authenticateToken, requireAdmin, logAudit } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireSelfOrAdmin, logAudit } = require('../middleware/auth');
 const { getCtoCreditRunningTotals, getCtoEmployeeDisplayRemainingAsync } = require('../services/ctoCreditRunningTotals');
 const {
   recomputeCtoLedgerFields,
@@ -166,7 +166,7 @@ const logCtoBalanceChange = async ({
 };
 
 // ─── GET /cto ─────────────────────────────────────────────────────────────────
-router.get('/cto', (req, res) => {
+router.get('/cto', authenticateToken, requireAdmin, (req, res) => {
   const empFilter = String(req.query.employeeNumber || '').trim();
   const params = [];
   let q = `
@@ -932,7 +932,7 @@ router.post('/cto/:id/commute', authenticateToken, requireAdmin, (req, res) => {
 });
 
 // ─── GET /cto/:id/usage ───────────────────────────────────────────────────────
-router.get('/cto/:id/usage', (req, res) => {
+router.get('/cto/:id/usage', authenticateToken, requireAdmin, (req, res) => {
   db.query(
     `SELECT * FROM cto_usage WHERE cto_credit_id = ? ORDER BY processed_at DESC`,
     [req.params.id],
@@ -944,7 +944,7 @@ router.get('/cto/:id/usage', (req, res) => {
 });
 
 // ─── GET /cto/:employeeNumber ─────────────────────────────────────────────────
-router.get('/cto/:employeeNumber', (req, res) => {
+router.get('/cto/:employeeNumber', authenticateToken, requireSelfOrAdmin('employeeNumber'), (req, res) => {
   const includeVoided =
     req.query.includeVoided === '1' ||
     req.query.include_voided === '1' ||

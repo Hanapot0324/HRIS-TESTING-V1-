@@ -25,7 +25,11 @@ const express = require('express');
 const router  = express.Router();
 const db      = require('../db');
 const jwt     = require('jsonwebtoken');
-const { logAudit, authenticateToken, requireAdmin } = require('../middleware/auth');
+const { logAudit, authenticateToken, requireAdmin, requireSelfOrAdmin } = require('../middleware/auth');
+
+// Every route in this router touches or discloses real leave-credit / CTO / Service-Credit
+// balances — require a valid session for all of them, then layer role/ownership checks below.
+router.use(authenticateToken);
 const {
   getScDisplayRemainingHours,
   computeScBalances,
@@ -304,7 +308,7 @@ const hasActiveCommutation = async (assignmentId) => {
 
 // ─── GET /leave_commutation ───────────────────────────────────────────────────
 
-router.get('/leave_commutation', (req, res) => {
+router.get('/leave_commutation', requireAdmin, (req, res) => {
   const sql = `
     SELECT lc.*,
            lt.leave_description,
@@ -328,7 +332,7 @@ router.get('/leave_commutation', (req, res) => {
 
 // ─── GET /leave_commutation/employee/:employeeNumber ─────────────────────────
 
-router.get('/leave_commutation/employee/:employeeNumber', (req, res) => {
+router.get('/leave_commutation/employee/:employeeNumber', requireSelfOrAdmin('employeeNumber'), (req, res) => {
   const sql = `
     SELECT lc.*,
            lt.leave_description,
@@ -347,7 +351,7 @@ router.get('/leave_commutation/employee/:employeeNumber', (req, res) => {
 
 // ─── GET /leave_commutation/carried-forward/:employeeNumber/:leave_code ───────
 
-router.get('/leave_commutation/carried-forward/:employeeNumber/:leave_code', (req, res) => {
+router.get('/leave_commutation/carried-forward/:employeeNumber/:leave_code', requireSelfOrAdmin('employeeNumber'), (req, res) => {
   const { employeeNumber, leave_code } = req.params;
   const sql = `
     SELECT COALESCE(SUM(commuted_hours), 0) AS total_commuted_hours,
@@ -368,7 +372,7 @@ router.get('/leave_commutation/carried-forward/:employeeNumber/:leave_code', (re
 
 // ─── POST /leave_commutation/commute/:assignmentId ───────────────────────────
 
-router.post('/leave_commutation/commute/:assignmentId', async (req, res) => {
+router.post('/leave_commutation/commute/:assignmentId', requireAdmin, async (req, res) => {
   const { assignmentId } = req.params;
   const { commuted_by, remarks } = req.body || {};
   const actorEmpNum = getActorEmployeeNumber(req, commuted_by);
@@ -720,7 +724,7 @@ async function commuteServiceCreditPeriod(req, res) {
   }
 }
 
-router.post('/leave_commutation/commute-sc/:serviceCreditId', authenticateToken, requireAdmin, commuteServiceCreditPeriod);
+router.post('/leave_commutation/commute-sc/:serviceCreditId', requireAdmin, commuteServiceCreditPeriod);
 
 // ─── POST /leave_commutation/commute-cto/:ctoCreditId ────────────────────────
 // Transfer remaining CTO period balance to Leave Commutation (mirrors commute-sc).
@@ -912,11 +916,11 @@ async function commuteCtoPeriod(req, res) {
   }
 }
 
-router.post('/leave_commutation/commute-cto/:ctoCreditId', authenticateToken, requireAdmin, commuteCtoPeriod);
+router.post('/leave_commutation/commute-cto/:ctoCreditId', requireAdmin, commuteCtoPeriod);
 
 // ─── PUT /leave_commutation/:id ───────────────────────────────────────────────
 
-router.put('/leave_commutation/:id', (req, res) => {
+router.put('/leave_commutation/:id', requireAdmin, (req, res) => {
   const { id } = req.params;
   const { status, approved_by, remarks } = req.body;
 
@@ -952,7 +956,7 @@ router.put('/leave_commutation/:id', (req, res) => {
 // ─── DELETE /leave_commutation/:id ────────────────────────────────────────────
 // Voids the usage row and unlocks the assignment so the balance is restored.
 
-router.delete('/leave_commutation/:id', async (req, res) => {
+router.delete('/leave_commutation/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
