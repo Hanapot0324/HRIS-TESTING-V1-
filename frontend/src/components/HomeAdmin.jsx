@@ -92,6 +92,7 @@ import {
 } from "@mui/icons-material";
 import logo from "../assets/logo.PNG";
 import earistBg from "../assets/EaristBG.PNG";
+import { broadcastRefreshDelay } from "../utils/realtimeRefresh";
 
 // ─── Design tokens (mirroring AttendanceUserState) ───────────────────────────
 const T = {
@@ -918,6 +919,9 @@ const useDashboardData = (settings) => {
           ...prev,
           pendingPayroll: p.pending || 0,
           processedPayroll: p.processed || 0,
+          // Counted server-side: this used to download every released
+          // payslip ever (tens of MB) just to take its length.
+          payslipCount: p.released || 0,
         }));
         setPayrollStatusData([
           {
@@ -1013,14 +1017,6 @@ const useDashboardData = (settings) => {
         }
       })
       .finally(() => setLoadingCarousel(false));
-
-    axios
-      .get(`${API_BASE_URL}/PayrollReleasedRoute/released-payroll`, auth)
-      .then((res) => {
-        const payslipCount = Array.isArray(res.data) ? res.data.length : 0;
-        setStats((prev) => ({ ...prev, payslipCount }));
-      })
-      .catch((err) => console.error("payslip count failed:", err?.message));
 
     axios
       .get(`${API_BASE_URL}/api/dashboard/monthly-attendance`, auth)
@@ -2649,10 +2645,18 @@ const NeedsAttention = () => {
 
   useEffect(() => {
     if (!socket || !connected) return;
-    const refresh = () => fetchQueue();
+    let refreshTimer = null;
+    const refresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        fetchQueue();
+      }, broadcastRefreshDelay());
+    };
     socket.on("adminDashboardUpdated", refresh);
     socket.on("notificationCreated", refresh);
     return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
       socket.off("adminDashboardUpdated", refresh);
       socket.off("notificationCreated", refresh);
     };
@@ -3680,17 +3684,23 @@ const AdminHome = () => {
 
   useEffect(() => {
     if (!socket || !connected) return;
+    // One pending refresh at a time: an announcement emits several events
+    // back to back, and each used to trigger its own refetch.
+    let refreshTimer = null;
     const scheduleRefresh = () => {
-      setTimeout(() => {
+      if (refreshTimer) return;
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
         if (typeof fetchNotificationsRef.current === "function")
           fetchNotificationsRef.current();
-      }, 250);
+      }, broadcastRefreshDelay());
     };
     socket.on("notificationCreated", scheduleRefresh);
     socket.on("announcementChanged", scheduleRefresh);
     socket.on("adminDashboardUpdated", scheduleRefresh);
     socket.on("payrollChanged", scheduleRefresh);
     return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
       socket.off("notificationCreated", scheduleRefresh);
       socket.off("announcementChanged", scheduleRefresh);
       socket.off("adminDashboardUpdated", scheduleRefresh);

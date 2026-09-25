@@ -2,130 +2,146 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authenticateToken } = require('../middleware/auth');
+const { createSharedCache } = require('../utils/concurrency');
+
+/**
+ * Admin dashboard aggregates are identical for every admin, and every open
+ * HomeAdmin refetches them ~1.5s after each attendance/announcement event.
+ * Share one in-flight computation between concurrent callers and reuse it for
+ * 1s — shorter than the client's 1.5s debounce, so an event-driven refresh
+ * never gets a result computed before the change that triggered it.
+ */
+const sharedResult = createSharedCache({
+  ttlMs: Math.max(0, parseInt(process.env.DASHBOARD_CACHE_TTL_MS || '1000', 10) || 0),
+});
 
 // GET Dashboard Statistics
+async function computeDashboardStats() {
+  const stats = {};
+
+  // Total Employees (person records with employee numbers)
+  const [employeeCount] = await db
+    .promise()
+    .query(
+      'SELECT COUNT(DISTINCT agencyEmployeeNum) as total FROM person_table WHERE agencyEmployeeNum IS NOT NULL'
+    );
+  stats.totalEmployees = employeeCount[0].total;
+
+  // Registered users by role / branch / employment status (UsersList parity)
+  try {
+    const [userRows] = await db.promise().query(`
+      SELECT
+        COUNT(*) AS totalUsers,
+        SUM(CASE WHEN branch = 0 THEN 1 ELSE 0 END) AS manila,
+        SUM(CASE WHEN branch = 1 THEN 1 ELSE 0 END) AS cavite,
+        SUM(CASE WHEN branch IS NULL OR (branch <> 0 AND branch <> 1) THEN 1 ELSE 0 END) AS unassignedBranch,
+        SUM(CASE WHEN LOWER(role) = 'superadmin' THEN 1 ELSE 0 END) AS superadmin,
+        SUM(CASE WHEN LOWER(role) = 'administrator' THEN 1 ELSE 0 END) AS administrator,
+        SUM(CASE WHEN LOWER(role) = 'staff' THEN 1 ELSE 0 END) AS staff,
+        SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS activeStatus,
+        SUM(CASE WHEN status = 'Inactive' THEN 1 ELSE 0 END) AS inactiveStatus,
+        SUM(CASE WHEN status = 'Default' OR status IS NULL OR status = '' THEN 1 ELSE 0 END) AS defaultStatus,
+        SUM(CASE WHEN status = 'Resigned' THEN 1 ELSE 0 END) AS resignedStatus,
+        SUM(CASE WHEN status = 'Terminated' THEN 1 ELSE 0 END) AS terminatedStatus,
+        SUM(CASE WHEN status = 'Retired' THEN 1 ELSE 0 END) AS retiredStatus
+      FROM users
+    `);
+    const u = userRows[0] || {};
+    stats.totalUsers = Number(u.totalUsers) || 0;
+    stats.manila = Number(u.manila) || 0;
+    stats.cavite = Number(u.cavite) || 0;
+    stats.unassignedBranch = Number(u.unassignedBranch) || 0;
+    stats.superadmin = Number(u.superadmin) || 0;
+    stats.administrator = Number(u.administrator) || 0;
+    stats.staff = Number(u.staff) || 0;
+    stats.activeStatus = Number(u.activeStatus) || 0;
+    stats.inactiveStatus = Number(u.inactiveStatus) || 0;
+    stats.defaultStatus = Number(u.defaultStatus) || 0;
+    stats.resignedStatus = Number(u.resignedStatus) || 0;
+    stats.terminatedStatus = Number(u.terminatedStatus) || 0;
+    stats.retiredStatus = Number(u.retiredStatus) || 0;
+    // Prefer registered users count for the Total Employees KPI when available
+    if (stats.totalUsers > 0) {
+      stats.totalEmployees = stats.totalUsers;
+    }
+  } catch (userStatsErr) {
+    console.warn('dashboard user stats:', userStatsErr?.message);
+    stats.totalUsers = stats.totalEmployees;
+    stats.manila = 0;
+    stats.cavite = 0;
+    stats.unassignedBranch = 0;
+    stats.superadmin = 0;
+    stats.administrator = 0;
+    stats.staff = 0;
+    stats.activeStatus = 0;
+    stats.inactiveStatus = 0;
+    stats.defaultStatus = 0;
+    stats.resignedStatus = 0;
+    stats.terminatedStatus = 0;
+    stats.retiredStatus = 0;
+  }
+
+  // Active Users (those who have logged in)
+  const [activeUsers] = await db
+    .promise()
+    .query('SELECT COUNT(*) as total FROM users WHERE role != "admin"');
+  stats.activeUsers = activeUsers[0].total;
+
+  // Today's Attendance (Time In records for today)
+  const today = new Date().toISOString().split('T')[0];
+  const todayStart = new Date(today).getTime();
+  const todayEnd = todayStart + 24 * 60 * 60 * 1000;
+
+  const [attendanceToday] = await db
+    .promise()
+    .query(
+      'SELECT COUNT(DISTINCT PersonID) as total FROM attendancerecordinfo WHERE AttendanceState = 1 AND AttendanceDateTime BETWEEN ? AND ?',
+      [todayStart, todayEnd]
+    );
+  stats.presentToday = attendanceToday[0].total;
+
+  // Pending leave requests needing action (0 = pending review, 1 = awaiting HR)
+  const [pendingLeaves] = await db
+    .promise()
+    .query(
+      `SELECT COUNT(*) as total FROM leave_request WHERE CAST(status AS CHAR) IN ('0', '1')`
+    );
+  stats.pendingLeaves = pendingLeaves[0]?.total || 0;
+
+  // Departments Count
+  const [departments] = await db
+    .promise()
+    .query('SELECT COUNT(*) as total FROM department_table');
+  stats.totalDepartments = departments[0].total;
+
+  // Active Announcements (last 30 days)
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const [announcements] = await db
+    .promise()
+    .query('SELECT COUNT(*) as total FROM announcements WHERE date >= ?', [
+      thirtyDaysAgo.toISOString().split('T')[0],
+    ]);
+  stats.recentAnnouncements = announcements[0].total;
+
+  // Open contact tickets (new / in progress / read)
+  try {
+    const [ticketCount] = await db.promise().query(`
+      SELECT COUNT(*) AS total FROM contact_us
+      WHERE status IN ('new', 'on_process', 'read')
+    `);
+    stats.openTickets = Number(ticketCount[0]?.total) || 0;
+  } catch (ticketErr) {
+    console.warn('dashboard open tickets:', ticketErr?.message);
+    stats.openTickets = 0;
+  }
+
+  return stats;
+}
+
 router.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   try {
-    const stats = {};
-
-    // Total Employees (person records with employee numbers)
-    const [employeeCount] = await db
-      .promise()
-      .query(
-        'SELECT COUNT(DISTINCT agencyEmployeeNum) as total FROM person_table WHERE agencyEmployeeNum IS NOT NULL'
-      );
-    stats.totalEmployees = employeeCount[0].total;
-
-    // Registered users by role / branch / employment status (UsersList parity)
-    try {
-      const [userRows] = await db.promise().query(`
-        SELECT
-          COUNT(*) AS totalUsers,
-          SUM(CASE WHEN branch = 0 THEN 1 ELSE 0 END) AS manila,
-          SUM(CASE WHEN branch = 1 THEN 1 ELSE 0 END) AS cavite,
-          SUM(CASE WHEN branch IS NULL OR (branch <> 0 AND branch <> 1) THEN 1 ELSE 0 END) AS unassignedBranch,
-          SUM(CASE WHEN LOWER(role) = 'superadmin' THEN 1 ELSE 0 END) AS superadmin,
-          SUM(CASE WHEN LOWER(role) = 'administrator' THEN 1 ELSE 0 END) AS administrator,
-          SUM(CASE WHEN LOWER(role) = 'staff' THEN 1 ELSE 0 END) AS staff,
-          SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END) AS activeStatus,
-          SUM(CASE WHEN status = 'Inactive' THEN 1 ELSE 0 END) AS inactiveStatus,
-          SUM(CASE WHEN status = 'Default' OR status IS NULL OR status = '' THEN 1 ELSE 0 END) AS defaultStatus,
-          SUM(CASE WHEN status = 'Resigned' THEN 1 ELSE 0 END) AS resignedStatus,
-          SUM(CASE WHEN status = 'Terminated' THEN 1 ELSE 0 END) AS terminatedStatus,
-          SUM(CASE WHEN status = 'Retired' THEN 1 ELSE 0 END) AS retiredStatus
-        FROM users
-      `);
-      const u = userRows[0] || {};
-      stats.totalUsers = Number(u.totalUsers) || 0;
-      stats.manila = Number(u.manila) || 0;
-      stats.cavite = Number(u.cavite) || 0;
-      stats.unassignedBranch = Number(u.unassignedBranch) || 0;
-      stats.superadmin = Number(u.superadmin) || 0;
-      stats.administrator = Number(u.administrator) || 0;
-      stats.staff = Number(u.staff) || 0;
-      stats.activeStatus = Number(u.activeStatus) || 0;
-      stats.inactiveStatus = Number(u.inactiveStatus) || 0;
-      stats.defaultStatus = Number(u.defaultStatus) || 0;
-      stats.resignedStatus = Number(u.resignedStatus) || 0;
-      stats.terminatedStatus = Number(u.terminatedStatus) || 0;
-      stats.retiredStatus = Number(u.retiredStatus) || 0;
-      // Prefer registered users count for the Total Employees KPI when available
-      if (stats.totalUsers > 0) {
-        stats.totalEmployees = stats.totalUsers;
-      }
-    } catch (userStatsErr) {
-      console.warn('dashboard user stats:', userStatsErr?.message);
-      stats.totalUsers = stats.totalEmployees;
-      stats.manila = 0;
-      stats.cavite = 0;
-      stats.unassignedBranch = 0;
-      stats.superadmin = 0;
-      stats.administrator = 0;
-      stats.staff = 0;
-      stats.activeStatus = 0;
-      stats.inactiveStatus = 0;
-      stats.defaultStatus = 0;
-      stats.resignedStatus = 0;
-      stats.terminatedStatus = 0;
-      stats.retiredStatus = 0;
-    }
-
-    // Active Users (those who have logged in)
-    const [activeUsers] = await db
-      .promise()
-      .query('SELECT COUNT(*) as total FROM users WHERE role != "admin"');
-    stats.activeUsers = activeUsers[0].total;
-
-    // Today's Attendance (Time In records for today)
-    const today = new Date().toISOString().split('T')[0];
-    const todayStart = new Date(today).getTime();
-    const todayEnd = todayStart + 24 * 60 * 60 * 1000;
-
-    const [attendanceToday] = await db
-      .promise()
-      .query(
-        'SELECT COUNT(DISTINCT PersonID) as total FROM attendancerecordinfo WHERE AttendanceState = 1 AND AttendanceDateTime BETWEEN ? AND ?',
-        [todayStart, todayEnd]
-      );
-    stats.presentToday = attendanceToday[0].total;
-
-    // Pending leave requests needing action (0 = pending review, 1 = awaiting HR)
-    const [pendingLeaves] = await db
-      .promise()
-      .query(
-        `SELECT COUNT(*) as total FROM leave_request WHERE CAST(status AS CHAR) IN ('0', '1')`
-      );
-    stats.pendingLeaves = pendingLeaves[0]?.total || 0;
-
-    // Departments Count
-    const [departments] = await db
-      .promise()
-      .query('SELECT COUNT(*) as total FROM department_table');
-    stats.totalDepartments = departments[0].total;
-
-    // Active Announcements (last 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const [announcements] = await db
-      .promise()
-      .query('SELECT COUNT(*) as total FROM announcements WHERE date >= ?', [
-        thirtyDaysAgo.toISOString().split('T')[0],
-      ]);
-    stats.recentAnnouncements = announcements[0].total;
-
-    // Open contact tickets (new / in progress / read)
-    try {
-      const [ticketCount] = await db.promise().query(`
-        SELECT COUNT(*) AS total FROM contact_us
-        WHERE status IN ('new', 'on_process', 'read')
-      `);
-      stats.openTickets = Number(ticketCount[0]?.total) || 0;
-    } catch (ticketErr) {
-      console.warn('dashboard open tickets:', ticketErr?.message);
-      stats.openTickets = 0;
-    }
-
-    res.json(stats);
+    res.json(await sharedResult('stats', computeDashboardStats));
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ error: 'Failed to fetch dashboard statistics' });
@@ -382,39 +398,52 @@ router.get(
   authenticateToken,
   async (req, res) => {
     try {
-      const [totalProcessed] = await db
-        .promise()
-        .query(
-          'SELECT COUNT(*) as count FROM payroll_processing WHERE status = 1'
-        );
-
-      const [totalPending] = await db
-        .promise()
-        .query(
-          'SELECT COUNT(*) as count FROM payroll_processing WHERE status = 0'
-        );
-
-      const [latestPayroll] = await db.promise().query(`
-      SELECT startDate, endDate, COUNT(*) as employeeCount 
-      FROM payroll_processing 
-      GROUP BY startDate, endDate 
-      ORDER BY startDate DESC 
-      LIMIT 1
-    `);
-
-      const summary = {
-        processed: totalProcessed[0]?.count || 0,
-        pending: totalPending[0]?.count || 0,
-        latestPeriod: latestPayroll[0] || null,
-      };
-
-      res.json(summary);
+      res.json(await sharedResult('payroll-summary', computePayrollSummary));
     } catch (error) {
       console.error('Error fetching payroll summary:', error);
       res.status(500).json({ error: 'Failed to fetch payroll summary' });
     }
   }
 );
+
+async function computePayrollSummary() {
+  const [totalProcessed] = await db
+    .promise()
+    .query(
+      'SELECT COUNT(*) as count FROM payroll_processing WHERE status = 1'
+    );
+
+  const [totalPending] = await db
+    .promise()
+    .query(
+      'SELECT COUNT(*) as count FROM payroll_processing WHERE status = 0'
+    );
+
+  let released = 0;
+  try {
+    const [releasedCount] = await db
+      .promise()
+      .query('SELECT COUNT(*) as count FROM payroll_released');
+    released = releasedCount[0]?.count || 0;
+  } catch (releasedErr) {
+    console.warn('dashboard released payslip count:', releasedErr?.message);
+  }
+
+  const [latestPayroll] = await db.promise().query(`
+  SELECT startDate, endDate, COUNT(*) as employeeCount 
+  FROM payroll_processing 
+  GROUP BY startDate, endDate 
+  ORDER BY startDate DESC 
+  LIMIT 1
+    `);
+
+  return {
+    processed: totalProcessed[0]?.count || 0,
+    pending: totalPending[0]?.count || 0,
+    latestPeriod: latestPayroll[0] || null,
+    released,
+  };
+}
 
 // Get Monthly Attendance Trend
 router.get(
@@ -435,17 +464,19 @@ router.get(
       const rangeStart = startDate.getTime();
       const rangeEnd = new Date(year, month, 1).getTime();
 
-      const [rows] = await db
-        .promise()
-        .query(
-          `SELECT FLOOR((AttendanceDateTime - ?) / 86400000) AS dayIdx,
-                  COUNT(DISTINCT PersonID) AS count
-           FROM attendancerecordinfo
-           WHERE AttendanceState = 1
-             AND AttendanceDateTime >= ? AND AttendanceDateTime < ?
-           GROUP BY dayIdx`,
-          [rangeStart, rangeStart, rangeEnd]
-        );
+      const [rows] = await sharedResult(`monthly-attendance:${rangeStart}:${rangeEnd}`, () =>
+        db
+          .promise()
+          .query(
+            `SELECT FLOOR((AttendanceDateTime - ?) / 86400000) AS dayIdx,
+                    COUNT(DISTINCT PersonID) AS count
+             FROM attendancerecordinfo
+             WHERE AttendanceState = 1
+               AND AttendanceDateTime >= ? AND AttendanceDateTime < ?
+             GROUP BY dayIdx`,
+            [rangeStart, rangeStart, rangeEnd]
+          ),
+      );
 
       const countByIndex = new Map(
         (rows || []).map((r) => [Number(r.dayIdx), Number(r.count) || 0]),

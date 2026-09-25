@@ -31,13 +31,14 @@ const fetchLeaveDeductionMeta = (employeeNumber, leave_code) =>
       `SELECT lt.leave_hours AS leave_type_hours
        FROM users u
        LEFT JOIN employment_category ec
-         ON CAST(ec.employeeNumber AS CHAR) = CAST(u.employeeNumber AS CHAR)
+         ON ec.employeeNumber = ?
        LEFT JOIN employment_type_config etc
          ON etc.id = COALESCE(ec.employmentCategory, u.employmentCategory)
        LEFT JOIN leave_table lt ON TRIM(lt.leave_code) = TRIM(?)
-       WHERE CAST(u.employeeNumber AS CHAR) = CAST(? AS CHAR)
+       WHERE u.employeeNumber = ?
        LIMIT 1`,
-      [leave_code, employeeNumber],
+      // Bound parameters instead of CAST(col AS CHAR) so indexes are used.
+      [employeeNumber, leave_code, employeeNumber],
       (err, rows) => {
         if (!err && rows?.length) return resolve(rows[0]);
         db.query(
@@ -134,10 +135,11 @@ async function getEmploymentTypeIdForEmployee(employeeNumber) {
     `SELECT COALESCE(ec.employmentCategory, u.employmentCategory) AS type_id
      FROM users u
      LEFT JOIN employment_category ec
-       ON CAST(ec.employeeNumber AS CHAR) = CAST(u.employeeNumber AS CHAR)
-     WHERE CAST(u.employeeNumber AS CHAR) = CAST(? AS CHAR)
+       ON ec.employeeNumber = ?
+     WHERE u.employeeNumber = ?
      LIMIT 1`,
-    [String(employeeNumber || "").trim()],
+    // Bound parameters instead of CAST(col AS CHAR) so indexes are used.
+    [String(employeeNumber || "").trim(), String(employeeNumber || "").trim()],
   );
   const id = rows?.[0]?.type_id;
   if (id === null || id === undefined || id === "") return null;

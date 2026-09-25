@@ -9,6 +9,7 @@ const {
   notifyMultipleUsers,
 } = require("../socket/socketService");
 const { authenticateToken, requireAdmin } = require("../middleware/auth");
+const { insertNotificationsBulk } = require("../utils/notificationFanout");
 const { parseBranchField } = require("../utils/branchScope");
 
 // GET all suspensions (normalize date_start/date_end for backward compat)
@@ -139,33 +140,18 @@ router.post(
               id: suspensionId,
             });
           }
-          let completed = 0;
-          employeeNumbers.forEach((empNum) => {
-            db.query(
-              "INSERT INTO notifications (employeeNumber, description, read_status, notification_type, action_link) VALUES (?, ?, 0, ?, ?)",
-              [empNum, notificationDescription, "suspension", `/suspension/${suspensionId}`],
-              (notifErr) => {
-                if (notifErr) {
-                  db.query(
-                    "INSERT INTO notifications (employeeNumber, description, read_status) VALUES (?, ?, 0)",
-                    [empNum, notificationDescription],
-                    () => {},
-                  );
-                }
-              completed++;
-                if (completed === employeeNumbers.length) {
-                  notifyMultipleUsers(
-                    employeeNumbers,
-                    "notificationCreated",
-                    {
-                      notification_type: "suspension",
-                      description: notificationDescription,
-                    },
-                  );
-                }
-              },
-            );
-          });
+          insertNotificationsBulk(employeeNumbers, {
+            description: notificationDescription,
+            type: "suspension",
+            actionLink: `/suspension/${suspensionId}`,
+          })
+            .then(() => {
+              notifyMultipleUsers(employeeNumbers, "notificationCreated", {
+                notification_type: "suspension",
+                description: notificationDescription,
+              });
+            })
+            .catch((e) => console.error("Suspension notification insert error:", e));
         });
 
         res.status(201).json({

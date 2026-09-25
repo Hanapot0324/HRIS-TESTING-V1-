@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { notifyPayrollChanged } = require('../socket/socketService');
 const { authenticateToken, logAudit, requireAdmin, isAdminRole } = require('../middleware/auth');
+const { attachEmploymentCategories } = require('../utils/employmentCategoryMerge');
 
 
 
@@ -36,20 +37,33 @@ router.get('/released-payroll-detailed', authenticateToken, (req, res) => {
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  const employeeClause = scopedEmployee ? 'WHERE CAST(pr.employeeNumber AS CHAR) = ?' : '';
+  // Staff (Home / Payslip, every employee): compare bare columns to the bound
+  // employee number so the payroll_released and employment_category indexes are
+  // used. The CAST(col AS CHAR) forms scanned the whole payroll history.
+  // Admins (all employees): the old CAST(...) = CAST(...) join compared every
+  // payroll row with every employment_category row and ran for minutes on a
+  // year of payroll; categories are merged in JS instead (attachEmploymentCategories).
+  const employeeClause = scopedEmployee ? 'WHERE pr.employeeNumber = ?' : '';
+  const categoryJoin = scopedEmployee
+    ? 'LEFT JOIN employment_category ec ON ec.employeeNumber = ?'
+    : '';
+  const categorySelect = scopedEmployee
+    ? 'COALESCE(ec.employmentCategory, -1) AS employmentCategory'
+    : '-1 AS employmentCategory';
   const queryParams = scopedEmployee ? [scopedEmployee] : [];
+  const joinedQueryParams = scopedEmployee ? [scopedEmployee, scopedEmployee] : [];
 
   const query = `
     SELECT
       pr.*,
-      COALESCE(ec.employmentCategory, -1) AS employmentCategory
+      ${categorySelect}
     FROM payroll_released pr
-    LEFT JOIN employment_category ec ON CAST(pr.employeeNumber AS CHAR) = CAST(ec.employeeNumber AS CHAR)
+    ${categoryJoin}
     ${employeeClause}
     ORDER BY pr.dateReleased DESC
   `;
 
-  db.query(query, queryParams, (err, results) => {
+  db.query(query, joinedQueryParams, (err, results) => {
     if (err) {
       console.error('Error fetching detailed released payroll:', err);
       console.error('Error details:', {
@@ -99,6 +113,9 @@ router.get('/released-payroll-detailed', authenticateToken, (req, res) => {
     // Audit log: viewing detailed released payroll (non-blocking)
     // Don't let audit logging failure prevent the response
 
+    if (!scopedEmployee) {
+      return attachEmploymentCategories(results, (rows) => res.json(rows));
+    }
     res.json(results);
   });
 });

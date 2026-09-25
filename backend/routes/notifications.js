@@ -55,10 +55,12 @@ async function fetchNotificationsForEmployee(employeeNumber) {
   const normalized = normalizeEmployeeNumber(raw);
 
   try {
+    // Compare the bare column (no CAST) so MySQL can use the
+    // idx_notifications_emp_id (employeeNumber, id) index instead of scanning
+    // every notification row on each Home page load / realtime refresh.
     const [rows] = await db.promise().query(
       `SELECT * FROM notifications
-       WHERE CAST(employeeNumber AS CHAR) = ?
-          OR CAST(employeeNumber AS CHAR) = ?
+       WHERE employeeNumber IN (?, ?)
        ORDER BY id DESC
        LIMIT 80`,
       [raw, normalized || raw],

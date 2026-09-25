@@ -10,6 +10,7 @@ const {
   notifyAnnouncementChanged,
 } = require('../socket/socketService');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
+const { insertNotificationsBulk } = require('../utils/notificationFanout');
 
 // ─────────────────────────────────────────────────────────────
 // Helpers
@@ -175,53 +176,22 @@ router.post('/api/announcements', authenticateToken, requireAdmin, upload.single
             ),
           );
 
-          const notificationPromises = users.map((user) =>
-            new Promise((resolve) => {
-              const empNum = String(user.employeeNumber).trim();
-              if (!empNum) { resolve({ success: false }); return; }
-
-              db.query(
-                `INSERT INTO notifications
-                   (employeeNumber, description, read_status, notification_type, action_link, announcement_id)
-                 VALUES (?, ?, 0, 'announcement', ?, ?)`,
-                [empNum, notificationDescription, `/announcement/${announcementId}`, announcementId],
-                (notifErr) => {
-                  if (notifErr) {
-                    db.query(
-                      `INSERT INTO notifications
-                         (employeeNumber, description, read_status, notification_type, action_link)
-                       VALUES (?, ?, 0, 'announcement', ?)`,
-                      [empNum, notificationDescription, `/announcement/${announcementId}`],
-                      (fallbackErr) => {
-                        if (fallbackErr) {
-                          db.query(
-                            `INSERT INTO notifications (employeeNumber, description, read_status)
-                             VALUES (?, ?, 0)`,
-                            [empNum, notificationDescription],
-                            (finalErr) => resolve({ success: !finalErr, employeeNumber: empNum }),
-                          );
-                        } else resolve({ success: true, employeeNumber: empNum });
-                      },
-                    );
-                  } else resolve({ success: true, employeeNumber: empNum });
-                },
-              );
-            }),
-          );
-
-          Promise.all(notificationPromises).then((results) => {
-            const successful = results.filter((r) => r.success).length;
-            const failed     = results.filter((r) => !r.success).length;
-            console.log(`Created ${successful} announcement notifications${failed > 0 ? ` (${failed} failed)` : ''}`);
-
-            if (employeeNumbers.length > 0) {
+          insertNotificationsBulk(employeeNumbers, {
+            description: notificationDescription,
+            type: 'announcement',
+            actionLink: `/announcement/${announcementId}`,
+            announcementId,
+          })
+            .then((created) => {
+              const failed = employeeNumbers.length - created;
+              console.log(`Created ${created} announcement notifications${failed > 0 ? ` (${failed} failed)` : ''}`);
               notifyMultipleUsers(employeeNumbers, 'notificationCreated', {
                 notification_type: 'announcement',
                 announcement_id: announcementId,
                 description: notificationDescription,
               });
-            }
-          }).catch((e) => console.error('Notification promise error:', e));
+            })
+            .catch((e) => console.error('Notification insert error:', e));
         }
 
         res.status(201).json({ message: 'Announcement created successfully', id: announcementId });

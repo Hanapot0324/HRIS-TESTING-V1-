@@ -1,4 +1,5 @@
 import API_BASE_URL from '../../apiConfig';
+import { fetchEmployeesByNumber } from '../../utils/employeeLookup';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import axios from 'axios';
 import {
@@ -789,15 +790,13 @@ const DepartmentAssignment = () => {
     setModalOpen(true);
 
     const map = {};
-    await Promise.all(department.employees.map(async (a) => {
-      if (!a.employeeNumber) return;
-      try {
-        const r = await axios.get(`${API_BASE_URL}/Remittance/employees/${a.employeeNumber}`, getAuthHeaders());
-        map[a.employeeNumber] = r.data;
-      } catch {
-        map[a.employeeNumber] = { employeeNumber: a.employeeNumber, name: a.name || 'Unknown' };
-      }
-    }));
+    const members = department.employees.filter((a) => a.employeeNumber);
+    const found = await fetchEmployeesByNumber(members.map((a) => a.employeeNumber));
+    members.forEach((a) => {
+      map[a.employeeNumber] =
+        found.get(String(a.employeeNumber).trim()) ||
+        { employeeNumber: a.employeeNumber, name: a.name || 'Unknown' };
+    });
     setDeptEmpDetails(map);
 
     // Auto-select first member

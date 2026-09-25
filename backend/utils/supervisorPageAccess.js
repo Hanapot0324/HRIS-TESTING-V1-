@@ -140,6 +140,18 @@ async function resolveCanonicalEmployeeNumber(employeeNumber) {
 
   if (!emp) return null;
 
+  // Fast path: an exact match can use the users.employeeNumber index. The
+  // leading-zero-tolerant empMatchSql below scans every user row, so only
+  // fall back to it when the stored number is formatted differently.
+  const exact = await queryAsync(
+    "SELECT employeeNumber FROM users WHERE employeeNumber = ? LIMIT 1",
+    [emp],
+  );
+  if (exact[0]?.employeeNumber != null) {
+    const found = String(exact[0].employeeNumber).trim();
+    if (found === emp) return found;
+  }
+
   const rows = await queryAsync(
     `SELECT employeeNumber FROM users WHERE ${empMatchSql("employeeNumber")} LIMIT 1`,
 
@@ -455,9 +467,11 @@ async function sendSupervisorAssignmentNotice({
   if (!emp || !description) return false;
 
   try {
+    // Runs for every soon-to-expire assignment on each 60s tick: compare the
+    // bare column so the notifications employeeNumber index is used.
     const existing = await queryAsync(
       `SELECT id FROM notifications
-       WHERE CAST(employeeNumber AS CHAR) = CAST(? AS CHAR)
+       WHERE employeeNumber = ?
          AND notification_type = 'supervisor_assignment'
          AND action_link = ?
        LIMIT 1`,

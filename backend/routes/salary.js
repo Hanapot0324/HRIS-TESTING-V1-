@@ -3,7 +3,9 @@ const router = express.Router();
 const db = require('../db');
 const { authenticateToken, logAudit, requireAdmin } = require('../middleware/auth');
 
-router.use(authenticateToken, requireAdmin);
+// Mounted at '/' in index.js: scope the guard to this router's own paths so it
+// does not run on (and reject) every other request that passes through.
+router.use('/api/salary-grade-status', authenticateToken, requireAdmin);
 
 // GET all salary grade status records
 router.get('/api/salary-grade-status', (req, res) => {

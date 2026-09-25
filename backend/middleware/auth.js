@@ -144,7 +144,15 @@ const ENRICH_TTL_MS = Math.max(
   5_000,
   parseInt(process.env.AUTH_ENRICH_TTL_MS || '60000', 10) || 60_000,
 );
+/** Must exceed the number of concurrently active users, or entries thrash and
+ *  nearly every request falls through to the DB again. Entries are tiny. */
+const ENRICH_MAX_ENTRIES = Math.max(
+  1000,
+  parseInt(process.env.AUTH_ENRICH_MAX_ENTRIES || '20000', 10) || 20000,
+);
 const enrichCache = new Map(); // key -> { expiresAt, value }
+/** Concurrent cache misses for the same user share one lookup (a page load fires many requests). */
+const enrichInFlight = new Map(); // key -> Promise<value>
 
 function enrichCacheKey(user) {
   if (user?.id != null) return `id:${user.id}`;
@@ -166,7 +174,7 @@ function setCachedEnrich(key, value) {
   if (!key) return;
   enrichCache.set(key, { value, expiresAt: Date.now() + ENRICH_TTL_MS });
   // Prevent unbounded growth under many unique tokens/users
-  if (enrichCache.size > 2000) {
+  if (enrichCache.size > ENRICH_MAX_ENTRIES) {
     const firstKey = enrichCache.keys().next().value;
     enrichCache.delete(firstKey);
   }
@@ -188,6 +196,25 @@ async function enrichUserFromDb(user) {
     }
   }
 
+  if (cacheKey && enrichInFlight.has(cacheKey)) {
+    const shared = await enrichInFlight.get(cacheKey);
+    return shared ? { ...user, ...shared } : user;
+  }
+
+  const lookup = lookupEnrichment(user, cacheKey);
+  if (cacheKey) {
+    enrichInFlight.set(cacheKey, lookup);
+    lookup.then(
+      () => enrichInFlight.delete(cacheKey),
+      () => enrichInFlight.delete(cacheKey),
+    );
+  }
+  const value = await lookup;
+  return value ? { ...user, ...value } : user;
+}
+
+/** DB half of enrichUserFromDb; resolves to the cached fields (or null if nothing to add). */
+async function lookupEnrichment(user, cacheKey) {
   let enriched = user;
 
   if (user.id) {
@@ -209,21 +236,15 @@ async function enrichUserFromDb(user) {
     enriched = { ...user, employeeNumber: canonical || String(user.employeeNumber).trim() };
   }
 
-  if (cacheKey && enriched !== user) {
-    setCachedEnrich(cacheKey, {
-      employeeNumber: enriched.employeeNumber,
-      role: enriched.role,
-      email: enriched.email,
-    });
-  } else if (cacheKey && user.employeeNumber) {
-    setCachedEnrich(cacheKey, {
-      employeeNumber: enriched.employeeNumber,
-      role: enriched.role,
-      email: enriched.email,
-    });
-  }
+  if (enriched === user && !user.employeeNumber) return null;
 
-  return enriched;
+  const value = {
+    employeeNumber: enriched.employeeNumber,
+    role: enriched.role,
+    email: enriched.email,
+  };
+  setCachedEnrich(cacheKey, value);
+  return value;
 }
 
 function authenticateToken(req, res, next) {

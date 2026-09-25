@@ -5,7 +5,13 @@ const { authenticateToken, logAudit, requireAdmin } = require('../middleware/aut
 const { getResolved } = require('../services/payrollTemplate/positionOverrides');
 const { notifyPayrollChanged } = require('../socket/socketService');
 
-router.use(authenticateToken, requireAdmin);
+// Mounted at '/' in index.js: scope the guard to this router's own paths so it
+// does not run on (and reject) every other request that passes through.
+router.use(
+  ['/api/department-assignment', '/api/department-table'],
+  authenticateToken,
+  requireAdmin,
+);
 
 // Payroll budget department: optional code telling the Appendix 33 export which
 // department tab an employee's pay is charged to. Blank is stored as NULL so the

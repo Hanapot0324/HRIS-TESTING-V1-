@@ -1,4 +1,5 @@
 import API_BASE_URL from '../../apiConfig';
+import { fetchEmployeesByNumber } from '../../utils/employeeLookup';
 import React, {
   useState,
   useEffect,
@@ -608,19 +609,11 @@ const WorkExperience = () => {
       setWorkExperiences(r.data);
       const ids = [...new Set(r.data.map((we) => we.person_id).filter(Boolean))];
       const namesMap = {};
-      await Promise.all(
-        ids.map(async (id) => {
-          try {
-            const res = await axios.get(
-              `${API_BASE_URL}/Remittance/employees/${id}`,
-              getAuthHeaders()
-            );
-            namesMap[id] = res.data.name || 'Unknown';
-          } catch {
-            namesMap[id] = 'Unknown';
-          }
-        })
-      );
+      // One bulk lookup instead of a request per employee.
+      const found = await fetchEmployeesByNumber(ids);
+      ids.forEach((id) => {
+        namesMap[id] = found.get(String(id).trim())?.name || 'Unknown';
+      });
       setEmployeeNames(namesMap);
     } catch {
       showSnackbar('Failed to fetch work experience records.', 'error');
