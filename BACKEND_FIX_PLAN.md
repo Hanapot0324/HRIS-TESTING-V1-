@@ -1,11 +1,190 @@
-# Backend Fix Plan: Problems, Locations and Solutions
+# Backend Diagnosis and Fix Plan
 
-**Scope:** backend only. Every item below is **still open**; fixes already made are on PR #1.
-Line numbers refer to the PR branch (`claude/gracious-mccarthy-guvu4f`). Each solution is the
-smallest safe change, chosen so the system holds up with **5,000+ employees using it at the
-same time**.
+Complete backend diagnosis for the HRIS system:
+
+- **Part A:** problems already **fixed** in PR #1 (what was wrong, where, what was done, measured result)
+- **Part B:** problems still **open**, in priority order (where to find them and the safest, simplest fix)
+- **Part C:** what's needed to serve **5,000+ employees at the same time**
+
+Line numbers refer to the PR branch (`claude/gracious-mccarthy-guvu4f`).
+
+## How the diagnosis was done
+
+- **Test database:** MariaDB rebuilt from the code (the repo has no schema) with realistic volume:
+  5,000 employees, 600k notifications, 600k device punches, 300k DTR rows, 240k released payslips,
+  70k official-time rows, 50k leave requests. The repo's own index migrations were applied.
+- **Load tests:** 100–200 simultaneous staff and 50 simultaneous admins, before and after each fix.
+- **Endpoint pass:** all 253 read endpoints across the 63 backend route files called one by one,
+  with every query captured and checked with `EXPLAIN` and MySQL 8 strict mode.
+- **Code scans:** every query in every backend file checked for queries in loops, non-indexable
+  comparisons, whole-table reads, blocking work and crash-prone error handling.
+- **Regression checks:** each changed endpoint's response compared with the previous version on the
+  same data; all 531 routes checked for access control before and after.
 
 ---
+
+# Part A: Diagnosed and fixed (PR #1)
+
+## Overall result (200 staff opening screens at the same time)
+
+| | Before | After |
+|---|---|---|
+| Screen loads per second | 74 | 457 |
+| Typical (p50) screen load | 2.4 s | 0.31 s |
+| Slow (p95) screen load | 5.0 s | 0.9 s |
+
+## A1. Staff blocked from their own pages (403) and repeated login checks
+- **Where:** `backend/routes/remittance.js`, `department.js`, `item.js`, `salary.js`, `tasks.js`,
+  `leave.js` (each had `router.use(authenticateToken, requireAdmin)` while mounted at `/` in `index.js`)
+- **Problem:** the admin-only check ran on **every** request passing through these routers, so staff
+  got 403 on notifications, dashboard, notes, events and their own leave and earnings. Each request
+  also re-checked the login token up to 7 times.
+- **Fix:** each router's check now applies only to its own paths (e.g.
+  `router.use('/employee-remittance', authenticateToken, requireAdmin)`). `GET /ot-types` in
+  `routes/serviceCredit.js` got its own `authenticateToken`, since it had relied on the old behaviour.
+- **Result:** staff pages work. All 531 routes tested without login: **0 became less protected**.
+
+## A2. Notifications read the whole table on every Home page load
+- **Where:** `backend/routes/notifications.js`, `fetchNotificationsForEmployee()`
+- **Problem:** `WHERE CAST(employeeNumber AS CHAR) = ?` cannot use an index, so every Home load and
+  every realtime refresh scanned all notifications.
+- **Fix:** `WHERE employeeNumber IN (?, ?)` plus an index on `notifications(employeeNumber, id)`,
+  created at startup if missing.
+- **Result:** 100 simultaneous users: **26 → 1,505 requests/s; 3.6 s → 65 ms**.
+
+## A3. Announcement / holiday / suspension notifications lost, other users got errors
+- **Where:** `backend/routes/announcements.js`, `routes/holiday.js`, `routes/suspensions.js`; new
+  helper `backend/utils/notificationFanout.js`
+- **Problem:** one INSERT per employee, all fired at the same moment. That overflowed the database
+  connection queue: most notifications were silently lost and other users' requests failed.
+- **Fix:** `insertNotificationsBulk()` inserts in chunks of 500 rows, one chunk at a time, keeping
+  the old column fallbacks for older tables.
+- **Result:** **212 of 5,000 saved → all 5,000 saved**, 0 errors for other users.
+
+## A4. Bulk registration crashed the server
+- **Where:** `backend/routes/users.js`, `POST /excel-register`; new helper `backend/utils/concurrency.js`
+- **Problem:** every row was processed at once with blocking password hashing (`bcrypt.hashSync`).
+  The page-access inserts had no error callback, so when the queue overflowed the whole server crashed.
+- **Fix:** 5 rows at a time (`mapWithConcurrency`), async `bcrypt.hash`, one multi-row page-access
+  insert per user, and error callbacks on every background query.
+- **Result:** **300-row upload crashed the server every time → 300/300 registered**, other users served.
+
+## A5. Supervisor-expiry job (runs every 60 s) loaded the database heavily
+- **Where:** `backend/utils/supervisorPageAccess.js`, `sendSupervisorAssignmentNotice()`
+- **Problem:** the duplicate-notice check used `CAST(employeeNumber AS CHAR)`, scanning all
+  notifications once per expiring assignment, every minute.
+- **Fix:** `WHERE employeeNumber = ?` (indexed).
+- **Result:** **~14 s → ~70 ms** of database time per run.
+
+## A6. Admin dashboard recomputed for every admin on every event
+- **Where:** `backend/routes/dashboard.js` (`/api/dashboard/stats`, `payroll-summary`,
+  `monthly-attendance`); helper `backend/utils/concurrency.js` (`createSharedCache`)
+- **Problem:** every open admin dashboard re-ran the same 8 aggregate queries after each attendance
+  event.
+- **Fix:** admins asking at the same moment share one result, reused for 1 s (shorter than the
+  screen's 1.5 s refresh delay, so results are never stale).
+- **Result:** 50 simultaneous admins: **102 → 2,170 requests/s; 478 ms → 21 ms**.
+
+## A7. Login-check cache too small
+- **Where:** `backend/middleware/auth.js`, `enrichUserFromDb()`
+- **Problem:** the cache held only 2,000 users, so with more users online it kept emptying and hit
+  the database on almost every request. A page firing several requests looked the user up several times.
+- **Fix:** holds 20,000 users (`AUTH_ENRICH_MAX_ENTRIES`), and simultaneous lookups for the same
+  user share one database query.
+
+## A8. Employee-number lookup scanned all users
+- **Where:** `backend/utils/supervisorPageAccess.js`, `resolveCanonicalEmployeeNumber()`
+- **Problem:** a full-table `REGEXP` comparison on every cache miss.
+- **Fix:** try an exact indexed match first; fall back to the old comparison only if needed.
+
+## A9. Connection queue too small
+- **Where:** `backend/db.js`
+- **Problem:** a limit of 200 waiting queries turned normal bursts into "Queue limit reached" errors.
+- **Fix:** default raised to 1,000 (still configurable with `DB_QUEUE_LIMIT`).
+
+## A10. My Attendance slow for every employee
+- **Where:** `backend/dashboardRoutes/Attendance.js`, `GET /api/attendance` (leave-gap query)
+- **Problem:** four `CAST(x AS CHAR) = CAST(lr.employeeNumber AS CHAR)` comparisons scanned users,
+  leave requests and official time on each load.
+- **Fix:** compare each column directly to the requested employee number (bound parameter).
+- **Result:** **4.9 s → 0.85 s** under 200 users (**5–8 ms** on its own); responses identical.
+
+## A11. DTR slow because of "modified by" name lookups
+- **Where:** `backend/dashboardRoutes/Attendance.js`, `attachModifierNames()`; used by
+  `POST /api/view-attendance`, `POST /api/view-attendance-full` and the special-rows batch
+- **Problem:** three `CAST` joins on person and user tables took about 90% of the DTR query time,
+  even though almost no rows are modified.
+- **Fix:** names are looked up afterwards with two indexed `IN (...)` queries, only for modified rows,
+  with the same name rules as before.
+- **Result:** DTR query **84 ms → under 10 ms**; **2.8 s → 0.32 s** under load; responses identical.
+
+## A12. Staff payslips scanned all payroll history
+- **Where:** `backend/payrollRoutes/PayrollReleased.js`, `GET /released-payroll-detailed` (staff path)
+- **Problem:** `WHERE CAST(pr.employeeNumber AS CHAR) = ?` and a `CAST` join to employment categories.
+- **Fix:** direct comparisons with the employee number; index on `payroll_released(employeeNumber, dateReleased)`.
+- **Result:** Home / Payslip **2.7 s → 0.30 s** under load.
+
+## A13. Admin payslip view never finished
+- **Where:** `backend/payrollRoutes/PayrollReleased.js` (admin path); new helper
+  `backend/utils/employmentCategoryMerge.js`
+- **Problem:** every payslip was compared with every employment-category row
+  (`CAST(...) = CAST(...)` on both sides).
+- **Fix:** categories are loaded once and matched in the backend code, with the same matching rules.
+- **Result:** **over 60 s (never finished) → 3.3 s**.
+
+## A14. Payroll Processed slow and showed duplicate rows
+- **Where:** `backend/payrollRoutes/Payroll.js`, `GET /payroll-processed`
+- **Problem:** same row × category join; an employee with two category rows appeared twice.
+- **Fix:** same `attachEmploymentCategories()` merge.
+- **Result:** faster, and no duplicated payroll rows.
+
+## A15. Supervisor leave list read all leave requests 3 times per employee
+- **Where:** `backend/routes/supervisor.js`, `GET /api/supervisor-leave/employees/:supervisorEmployeeNumber`
+- **Problem:** three correlated `COUNT` subqueries per department employee, each scanning all leave requests.
+- **Fix:** one grouped count (`GROUP BY employeeNumber, status`) for the department's employees.
+- **Result:** identical counts; one indexed query instead of millions of row reads.
+
+## A16. Leave deduction lookups scanned all users
+- **Where:** `backend/routes/leave.js`, `fetchLeaveDeductionMeta()`;
+  `backend/services/deductionPolicyService.js`, `fetchLeaveDeductionMeta()` and `getEmploymentTypeIdForEmployee()`
+- **Problem:** `CAST` comparisons on every leave deduction, including inside bulk loops.
+- **Fix:** bound parameters; indexed. Results identical.
+
+## A17. Missing per-employee indexes
+- **Where:** `backend/index.js` (`ensureLeadingIndexes`), `backend/migrations/add_concurrency_indexes.sql`
+- **Problem:** the lookups behind Home, DTR, Payslip and Leave had no index to use.
+- **Fix:** 15 indexes created at startup only if missing: `notifications`, `attendancerecordinfo`,
+  `users`, `person_table`, `attendancerecord`, `officialtime`, `leave_request`, `leave_assignment`,
+  `payroll_released`, `employment_category`, `transaction_table`, `notes`, `events`, `service_credit`, `cto_credit`.
+- **Result:** staff Leave / notes / events **~1.6 s → 0.30 s** under load.
+
+## A18. Admin Home downloaded every payslip just to count them
+- **Where:** `backend/routes/dashboard.js`, `computePayrollSummary()` (and the Admin Home screen)
+- **Problem:** about 60 MB downloaded on every dashboard refresh to take its length.
+- **Fix:** `payroll-summary` now returns a `released` count.
+
+## A19. Admin screens sent one name request per employee
+- **Where:** `backend/payrollRoutes/Remittance.js`, new `POST /Remittance/employees/lookup`
+  (admin only); used by PDS sections, Leave Request, Department Assignment and Item Table
+- **Problem:** thousands of requests per page load.
+- **Fix:** one batch request per 1,000 employees; same fields as the single lookup.
+
+## A20. DTR downloaded all employment categories, then audited every load
+- **Where:** `backend/dashboardRoutes/EmployeeCategory.js`, `GET /employment-category/:employeeNumber`
+  (and the DTR screen)
+- **Problem:** each DTR load downloaded all 5,000 categories (1 MB) to find one. After switching to
+  the single-employee endpoint, that endpoint wrote an audit row on every view.
+- **Fix:** DTR fetches only the employee's own row; own-record lookups are not audited (viewing
+  someone else's record still is).
+
+## Frontend changes that support these fixes (for completeness)
+- Notification refreshes after a broadcast are combined and spread over ~3 s (`Home.jsx`, `HomeAdmin.jsx`).
+- Batch name lookup helper `frontend/src/utils/employeeLookup.js`.
+- DTR fetches only its own employment category (`DailyTimeRecord.jsx`).
+
+---
+
+# Part B: Still open (priority order)
 
 ## Priority 1: the server can crash (fix before anything else)
 
@@ -251,7 +430,7 @@ With 5,000 people online, one crash logs everyone out. These must be fixed first
 
 ---
 
-## What's needed for 5,000+ simultaneous employees
+# Part C: What's needed for 5,000+ simultaneous employees
 
 Tested capacity so far: **one Node process handled 457 screen loads per second** with 200 users
 clicking nonstop (no pauses between clicks). Real users pause between clicks, so this covers
@@ -275,17 +454,6 @@ To get safely above that, in this order:
    a load balancer can restart a stuck process.
 
 ---
-
-## Already fixed in PR #1 (for reference)
-
-| Area | Before | After |
-|---|---|---|
-| Staff screens, 200 simultaneous users | 2.4 s typical load | 0.31 s |
-| Notifications | 3.6 s | 65 ms |
-| Admin payslip view | over 60 s | 3.3 s |
-| Announcement notifications | 212 of 5,000 saved | all saved |
-| Bulk registration of 300 rows | crashed the server | works |
-| Staff blocked from their own pages (403) | broken | fixed |
 
 **Not tested:** against the real database (the repo has no schema), so re-run a load test on the
 real server after applying these fixes.
