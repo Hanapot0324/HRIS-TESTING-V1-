@@ -82,6 +82,8 @@ Recommendation: a small `backend/routes/me.js` router mounted at `/api/me` that 
 | S5 | Medium | `backend/routes/auth.js` | OTP codes are kept in an in-memory object (`twoFACodes`); no attempt counter / rate limit visible on `/verify-2fa-code`. |
 | S6 | Medium | `backend/routes/password.js:330, 367` | `/verify-password-change-code` and `/complete-password-change` are unauthenticated — need to verify they are bound to a verified code. |
 | S7 | Low | auth model | JWTs (10h) cannot be revoked; "sign out other sessions" needs a server-side session check. |
+| S8 | Medium | `backend/routes/announcements.js:50` | `GET /api/announcements` is unauthenticated and, without `?audience=employee`, also returns `hr_only` announcements. The mobile app requests `audience=employee`, but the server should not serve HR-only items to anonymous callers. |
+| S9 | Medium | `backend/routes/leave.js` `PUT /leave_request/:id` | Staff could self-cancel their own request in **any** status (incl. HR-approved, which restores balances); the staff UI only allows pending. **Fixed** — see §8. |
 | B1 | Functional | `backend/routes/leave.js:1230` | Staff cannot list leave types (`requireAdmin`), but the leave form needs them. |
 | T1 | Process | repo | No automated tests exist; spec §4 negative-authorization tests need a test harness (e.g. `jest` + `supertest` against a test DB with synthetic data). |
 
@@ -99,3 +101,22 @@ Recommendation: a small `backend/routes/me.js` router mounted at `/api/me` that 
 2. Approve fixing S1–S3 **before** building mobile screens (strongly recommended — the mobile app would otherwise ride on bypassable auth).
 3. Confirm payslips are approved for mobile self-service.
 4. Confirm whether profile editing on mobile is view-only in v1.
+
+## 8. Implementation status (owner decisions: Flutter; security first)
+
+| Item | Status | Where |
+|---|---|---|
+| S1 login bypass | **Fixed** — signed, single-use login ticket chains password → OTP → token; OTP single-use, 5-attempt limit; `/send-2fa-code` needs the ticket | `backend/routes/auth.js`, `backend/utils/loginTicket.js`, `frontend/src/components/Login.jsx` |
+| S4 account enumeration on `/login` | **Fixed** — one generic message | `backend/routes/auth.js` |
+| S5 OTP brute force | **Fixed** (per-code attempt limit). No IP rate limiting yet | `backend/routes/auth.js` |
+| `/api/me` router | **Done** — `profile`, `dtr`, `leave-types`; identity from token only | `backend/routes/me.js` |
+| B1 leave types 403 for staff | **Fixed** — web + mobile use `/api/me/leave-types` | `frontend/src/components/LEAVE/LeaveRequestUser.jsx` |
+| S9 self-cancel any status | **Fixed** — staff may cancel only pending | `backend/routes/leave.js` |
+| T1 no tests | **Started** — jest + supertest, DB mocked (43 tests) | `backend/__tests__/` |
+| Flutter staff app | **Done (v1)** — Home, My DTR, My Leave, My Records, Notifications, Profile; 35 tests | `mobile/` |
+| S2 attendance IDOR, S3 PDS IDOR | **Open** — next step; needs per-route audit against HR web workflows | `backend/dashboardRoutes/*` |
+| S6 password-change endpoints, S7 revocation, S8 announcements | **Open** | — |
+| Payslips on mobile | **Not included** — awaiting approval (§7.3) | — |
+
+Known pre-existing issue (not from this work): `vite build` fails on Linux because
+`Login.jsx` imports `../assets/EaristBG.PNG` and the file's case differs.
