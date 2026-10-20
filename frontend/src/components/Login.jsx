@@ -511,7 +511,6 @@ const Login = () => {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [employeeNumber, setEmployeeNumber] = useState("");
-  const [resolvedEmployeeNumber, setResolvedEmployeeNumber] = useState("");
   const [formData, setFormData] = useState({ password: "" });
   const [errMessage, setErrorMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -520,6 +519,8 @@ const Login = () => {
   const [twoFactorError, setTwoFactorError] = useState("");
   const [success, setSuccess] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  // Server-issued ticket chaining password -> 2FA -> session token.
+  const [loginTicket, setLoginTicket] = useState("");
   const [attempts, setAttempts] = useState(0);
   const [isLocked, setIsLocked] = useState(false);
   const [lockTimer, setLockTimer] = useState(0);
@@ -619,11 +620,6 @@ const Login = () => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showIntro]);
-
-  const employeeNumberForRequests = useMemo(
-    () => resolvedEmployeeNumber || employeeNumber,
-    [resolvedEmployeeNumber, employeeNumber]
-  );
 
   const pin = useMemo(() => pinDigits.join(""), [pinDigits]);
 
@@ -765,17 +761,16 @@ const Login = () => {
     }
     const allowed = String(raw).replace(/[^0-9A-Za-z]/g, "").toUpperCase();
     setEmployeeNumber(allowed);
-    setResolvedEmployeeNumber("");
   };
 
-  const send2FACode = async (email, empNumber, options = {}) => {
+  const send2FACode = async (ticket, options = {}) => {
     const { isResend = false } = options;
     setResendLoading(true);
     try {
       const res = await fetch(`${API_BASE_URL}/send-2fa-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, employeeNumber: empNumber }),
+        body: JSON.stringify({ loginTicket: ticket }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -854,14 +849,14 @@ const Login = () => {
       const res = await fetch(`${API_BASE_URL}/verify-2fa-code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: userEmail, code: pin }),
+        body: JSON.stringify({ loginTicket, code: pin }),
       });
       const data = await res.json();
       if (res.ok && data.verified) {
         const loginRes = await fetch(`${API_BASE_URL}/complete-2fa-login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: userEmail, employeeNumber: employeeNumberForRequests }),
+          body: JSON.stringify({ loginTicket: data.loginTicket }),
         });
         const loginData = await loginRes.json();
         if (loginRes.ok) handlePostLoginFlow(loginData);
@@ -966,7 +961,7 @@ const Login = () => {
       if (response.ok) {
         setLoginAttempts(0); localStorage.removeItem("loginLockData");
         const canonicalEmp = data.employeeNumber || employeeNumber;
-        setResolvedEmployeeNumber(canonicalEmp); setUserEmail(data.email);
+        setUserEmail(data.email); setLoginTicket(data.loginTicket);
         try {
           let globalMfaEnabled = true;
           try {
@@ -980,7 +975,7 @@ const Login = () => {
           if (!globalMfaEnabled) {
             const loginRes = await fetch(`${API_BASE_URL}/complete-2fa-login`, {
               method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email: data.email, employeeNumber: canonicalEmp }),
+              body: JSON.stringify({ loginTicket: data.loginTicket }),
             });
             const loginData = await loginRes.json();
             if (loginRes.ok) handlePostLoginFlow(loginData);
@@ -993,11 +988,11 @@ const Login = () => {
               mfaEnabled = !(prefData.enable_mfa === 0 || prefData.enable_mfa === false);
             }
             if (mfaEnabled) {
-              await send2FACode(data.email, canonicalEmp); setShow2FA(true);
+              await send2FACode(data.loginTicket); setShow2FA(true);
             } else {
               const loginRes = await fetch(`${API_BASE_URL}/complete-2fa-login`, {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: data.email, employeeNumber: canonicalEmp }),
+                body: JSON.stringify({ loginTicket: data.loginTicket }),
               });
               const loginData = await loginRes.json();
               if (loginRes.ok) handlePostLoginFlow(loginData);
@@ -1005,7 +1000,7 @@ const Login = () => {
             }
           }
         } catch {
-          await send2FACode(data.email, canonicalEmp); setShow2FA(true);
+          await send2FACode(data.loginTicket); setShow2FA(true);
         }
       } else {
         const newLoginAttempts = loginAttempts + 1;
@@ -1576,7 +1571,7 @@ const Login = () => {
                 <VerifiedUserOutlined sx={{ fontSize: 16 }} />
                 {twoFactorLoading ? "Verifying..." : "Verify code"}
               </Button>
-              <Button fullWidth variant="outlined" onClick={() => send2FACode(userEmail, employeeNumberForRequests, { isResend: true })} disabled={resendLoading || resendTimer > 0}
+              <Button fullWidth variant="outlined" onClick={() => send2FACode(loginTicket, { isResend: true })} disabled={resendLoading || resendTimer > 0}
                 sx={{ py: 1.2, px: 1.5, borderRadius: "10px", textTransform: "none", borderColor: "rgba(128,0,32,0.3)", color: crimson, fontSize: 13, gap: 1, "&:hover": { borderColor: "rgba(128,0,32,0.3)", bgcolor: "rgba(128,0,32,0.05)" }, "&:disabled": { bgcolor: "rgba(128,0,32,0.04)", borderColor: "rgba(128,0,32,0.15)", color: "rgba(128,0,32,0.4)" } }}>
                 <AccessTimeIcon sx={{ fontSize: 14 }} />
                 {resendLoading ? "Sending..." : resendTimer > 0 ? "Resend available in" : "Resend code"}

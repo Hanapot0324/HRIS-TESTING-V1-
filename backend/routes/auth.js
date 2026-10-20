@@ -6,6 +6,39 @@ const jwt = require('jsonwebtoken');
 const transporter = require('../config/email');
 const { twoFACodes } = require('../utils/verificationCodes');
 const { JWT_SECRET } = require('../middleware/auth');
+const {
+  issueLoginTicket,
+  verifyLoginTicket,
+  consumeLoginTicket,
+} = require('../utils/loginTicket');
+
+const MAX_2FA_ATTEMPTS = 5;
+const INVALID_TICKET_ERROR = 'Login session expired. Please sign in again.';
+
+/** Same rules /send-2fa-code has always applied: MFA on unless disabled globally or per user. */
+async function isMfaRequired(employeeNumber) {
+  const [globalRows] = await db.promise().query(
+    "SELECT setting_value FROM system_settings WHERE setting_key = 'global_mfa_enabled'",
+  );
+  const globalRaw = globalRows.length > 0 ? globalRows[0].setting_value : null;
+  const globalMfaEnabled =
+    globalRaw === null ||
+    globalRaw === undefined ||
+    globalRaw === 'true' ||
+    globalRaw === true ||
+    globalRaw === '1' ||
+    globalRaw === 1;
+  if (!globalMfaEnabled) return false;
+
+  const [prefRows] = await db.promise().query(
+    'SELECT enable_mfa FROM user_preferences WHERE employee_number = ?',
+    [employeeNumber],
+  );
+  if (prefRows.length > 0 && (prefRows[0].enable_mfa === 0 || prefRows[0].enable_mfa === false)) {
+    return false;
+  }
+  return true;
+}
 
 // LOGIN
 router.post('/login', (req, res) => {
@@ -27,10 +60,18 @@ router.post('/login', (req, res) => {
     WHERE u.employeeNumber = ?
   `;
 
+  if (!employeeNumber || !password) {
+    return res.status(400).send({ message: 'Invalid credentials' });
+  }
+
   db.query(query, [employeeNumber], async (err, result) => {
-    if (err) return res.status(500).send(err);
+    if (err) {
+      console.error('Login query error:', err.code || err.message);
+      return res.status(500).send({ message: 'Login failed. Please try again.' });
+    }
+    // Same message for unknown account and wrong password (no account enumeration).
     if (result.length === 0)
-      return res.status(400).send({ message: 'User not found' });
+      return res.status(400).send({ message: 'Invalid credentials' });
 
     const user = result[0];
     const isMatch = await bcrypt.compare(password, user.password);
@@ -41,18 +82,23 @@ router.post('/login', (req, res) => {
       email: user.email,
       employeeNumber: user.employeeNumber,
       fullName: user.fullName,
+      loginTicket: issueLoginTicket(
+        { userId: user.id, employeeNumber: user.employeeNumber, email: user.email },
+        'password',
+      ),
     });
   });
 });
 
 // Send 2FA code
 router.post('/send-2fa-code', async (req, res) => {
-  const { email, employeeNumber } = req.body;
-  if (!email || !employeeNumber) {
-    return res
-      .status(400)
-      .json({ error: 'Email and employee number required' });
+  // Identity comes from the password-verified ticket, never from the body —
+  // otherwise anyone could trigger OTP emails for any account.
+  const ticket = verifyLoginTicket(req.body?.loginTicket);
+  if (!ticket || ticket.stage !== 'password') {
+    return res.status(401).json({ error: INVALID_TICKET_ERROR });
   }
+  const { email, employeeNumber } = ticket;
 
   // Check global MFA setting first
   db.query(
@@ -130,7 +176,7 @@ router.post('/send-2fa-code', async (req, res) => {
           const code = Math.floor(100000 + Math.random() * 900000).toString();
           const expiresAt = Date.now() + 15 * 60 * 1000;
 
-          twoFACodes[email] = { code, expiresAt };
+          twoFACodes[email] = { code, expiresAt, attempts: 0 };
 
           try {
             const fromEmail = process.env.GMAIL_USER;
@@ -178,7 +224,12 @@ router.post('/send-2fa-code', async (req, res) => {
 
 // Verify 2FA code
 router.post('/verify-2fa-code', (req, res) => {
-  const { email, code } = req.body;
+  const ticket = verifyLoginTicket(req.body?.loginTicket);
+  if (!ticket || ticket.stage !== 'password') {
+    return res.status(401).json({ error: INVALID_TICKET_ERROR });
+  }
+  const { email } = ticket;
+  const code = String(req.body?.code ?? '').trim();
   const record = twoFACodes[email];
 
   if (!record) {
@@ -195,15 +246,48 @@ router.post('/verify-2fa-code', (req, res) => {
   }
 
   if (record.code !== code) {
+    record.attempts = (record.attempts || 0) + 1;
+    if (record.attempts >= MAX_2FA_ATTEMPTS) {
+      delete twoFACodes[email];
+      return res
+        .status(400)
+        .json({ error: 'Too many invalid attempts. Please request a new code.' });
+    }
     return res.status(400).json({ error: 'Invalid code' });
   }
 
-  res.json({ verified: true });
+  // Codes are single-use.
+  delete twoFACodes[email];
+  res.json({
+    verified: true,
+    loginTicket: issueLoginTicket(
+      { userId: ticket.uid, employeeNumber: ticket.employeeNumber, email },
+      'mfa',
+    ),
+  });
 });
 
 // Complete 2FA login
-router.post('/complete-2fa-login', (req, res) => {
-  const { email, employeeNumber } = req.body;
+router.post('/complete-2fa-login', async (req, res) => {
+  // A session token is only issued for a password-verified ticket, and — unless
+  // MFA is off for this account — only after the OTP step upgraded it to 'mfa'.
+  const ticket = verifyLoginTicket(req.body?.loginTicket);
+  if (!ticket) {
+    return res.status(401).json({ error: INVALID_TICKET_ERROR });
+  }
+  const { email, employeeNumber } = ticket;
+
+  if (ticket.stage !== 'mfa') {
+    let mfaRequired = true;
+    try {
+      mfaRequired = await isMfaRequired(employeeNumber);
+    } catch (err) {
+      console.error('Error checking MFA requirement:', err.code || err.message);
+    }
+    if (mfaRequired) {
+      return res.status(401).json({ error: 'Verification code required.' });
+    }
+  }
 
   const query = `
     SELECT u.*,
@@ -233,6 +317,7 @@ router.post('/complete-2fa-login', (req, res) => {
 
     const user = result[0];
     delete twoFACodes[email];
+    consumeLoginTicket(ticket);
 
     const isDefaultPassword = user.isDefaultPassword === 1 || user.isDefaultPassword === true;
 
