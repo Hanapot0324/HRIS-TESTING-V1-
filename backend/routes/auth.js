@@ -285,7 +285,7 @@ router.post('/complete-2fa-login', async (req, res) => {
       console.error('Error checking MFA requirement:', err.code || err.message);
     }
     if (mfaRequired) {
-      return res.status(401).json({ error: 'Verification code required.' });
+      return res.status(401).json({ error: 'Verification code required.', mfaRequired: true });
     }
   }
 

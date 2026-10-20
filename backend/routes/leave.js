@@ -3022,6 +3022,14 @@ router.put("/leave_request/:id", (req, res) => {
             "Only HR/admin may change a leave request's status; employees may only cancel their own request.",
         });
       }
+      // Matches the staff UI rule: an employee may only withdraw a request that is still
+      // pending. Once a supervisor/HR has acted on it (and balances may have moved),
+      // only HR can reverse it.
+      if (!callerIsAdmin && oldStatus !== 0) {
+        return res.status(403).json({
+          error: "Only pending leave requests can be cancelled. Please contact HR.",
+        });
+      }
 
       if (!Number.isInteger(newStatus) || ![0, 1, 2, 3, 4].includes(newStatus)) {
         return res.status(400).json({ error: "Invalid status value" });

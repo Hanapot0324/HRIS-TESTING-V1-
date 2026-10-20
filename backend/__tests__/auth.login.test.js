@@ -123,6 +123,7 @@ describe('POST /complete-2fa-login', () => {
     const ticket = await passwordStep();
     const res = await request(app).post('/complete-2fa-login').send({ loginTicket: ticket });
     expect(res.status).toBe(401);
+    expect(res.body.mfaRequired).toBe(true);
     expect(res.body.token).toBeUndefined();
   });
 
