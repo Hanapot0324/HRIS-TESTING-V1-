@@ -24,22 +24,23 @@ void main() {
     auth = AuthController(api: api, store: MemorySessionStore());
     backend.routes.addAll({
       '/leaveRoute/leave_assignment/employee/1001': (_) => backend.json([]),
-      '/leaveRoute/leave_request/1001': (_) => backend.json([
-        {
-          'id': 1,
-          'leave_code': 'VL',
-          'leave_description': 'Vacation Leave',
-          'leave_date': '2026-11-03',
-          'status': 0,
-        },
-        {
-          'id': 2,
-          'leave_code': 'SL',
-          'leave_description': 'Sick Leave',
-          'leave_date': '2026-10-01',
-          'status': 2,
-        },
-      ]),
+      '/leaveRoute/leave_request/1001':
+          (_) => backend.json([
+            {
+              'id': 1,
+              'leave_code': 'VL',
+              'leave_description': 'Vacation Leave',
+              'leave_date': '2026-11-03',
+              'status': 0,
+            },
+            {
+              'id': 2,
+              'leave_code': 'SL',
+              'leave_description': 'Sick Leave',
+              'leave_date': '2026-10-01',
+              'status': 2,
+            },
+          ]),
       '/api/announcements': (_) => backend.json([]),
       '/api/notifications/1001': (_) => backend.json([]),
     });
@@ -92,10 +93,13 @@ void main() {
     await auth.signIn('1001', 'Correct#Pass1');
     await tester.pumpWidget(HrisApp(auth: auth, api: api));
     await tester.pumpAndSettle();
-    final labels = tester
-        .widgetList<NavigationDestination>(find.byType(NavigationDestination))
-        .map((d) => d.label)
-        .toList();
+    final labels =
+        tester
+            .widgetList<NavigationDestination>(
+              find.byType(NavigationDestination),
+            )
+            .map((d) => d.label)
+            .toList();
     expect(labels, ['Home', 'My DTR', 'My Leave', 'My Records', 'Profile']);
     for (final word in [
       'Payroll',
@@ -162,8 +166,8 @@ void main() {
     tester,
   ) async {
     api.token = 'tok';
-    backend.routes['/api/me/dtr'] = (_) =>
-        backend.json({'error': 'Access denied'}, 403);
+    backend.routes['/api/me/dtr'] =
+        (_) => backend.json({'error': 'Access denied'}, 403);
     await tester.pumpWidget(
       MaterialApp(
         home: DtrScreen(

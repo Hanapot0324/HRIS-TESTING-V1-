@@ -28,9 +28,8 @@ class _FileLeaveScreenState extends State<FileLeaveScreen> {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _dates.isEmpty
-          ? now
-          : _dates.last.add(const Duration(days: 1)),
+      initialDate:
+          _dates.isEmpty ? now : _dates.last.add(const Duration(days: 1)),
       firstDate: DateTime(now.year - 1),
       lastDate: DateTime(now.year + 1, 12, 31),
       helpText: 'Select a leave date',
@@ -57,25 +56,26 @@ class _FileLeaveScreenState extends State<FileLeaveScreen> {
     final type = types.firstWhere((t) => t.code == _leaveCode);
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Submit leave request?'),
-        content: Text(
-          '${type.description}\n'
-          '${_dates.length} day${_dates.length == 1 ? '' : 's'}: '
-          '${_dates.map(fmtDate.format).join(', ')}\n\n'
-          'Your request will be reviewed. Credits are only deducted once approved.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Back'),
+      builder:
+          (ctx) => AlertDialog(
+            title: const Text('Submit leave request?'),
+            content: Text(
+              '${type.description}\n'
+              '${_dates.length} day${_dates.length == 1 ? '' : 's'}: '
+              '${_dates.map(fmtDate.format).join(', ')}\n\n'
+              'Your request will be reviewed. Credits are only deducted once approved.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Back'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Submit'),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Submit'),
-          ),
-        ],
-      ),
     );
     if (confirmed != true || !mounted) return;
 
@@ -111,7 +111,9 @@ class _FileLeaveScreenState extends State<FileLeaveScreen> {
             padding: const EdgeInsets.all(16),
             children: [
               DropdownButtonFormField<String>(
-                initialValue: _leaveCode,
+                // `value` (not `initialValue`) so the app builds on Flutter 3.29+.
+                // ignore: deprecated_member_use
+                value: _leaveCode,
                 isExpanded: true,
                 decoration: const InputDecoration(labelText: 'Leave type'),
                 items: [
@@ -124,9 +126,8 @@ class _FileLeaveScreenState extends State<FileLeaveScreen> {
                       ),
                     ),
                 ],
-                onChanged: _submitting
-                    ? null
-                    : (v) => setState(() => _leaveCode = v),
+                onChanged:
+                    _submitting ? null : (v) => setState(() => _leaveCode = v),
               ),
               const SizedBox(height: 24),
               Row(
@@ -154,9 +155,10 @@ class _FileLeaveScreenState extends State<FileLeaveScreen> {
                     for (final d in _dates)
                       InputChip(
                         label: Text(fmtDayDate.format(d)),
-                        onDeleted: _submitting
-                            ? null
-                            : () => setState(() => _dates.remove(d)),
+                        onDeleted:
+                            _submitting
+                                ? null
+                                : () => setState(() => _dates.remove(d)),
                         deleteButtonTooltipMessage: 'Remove date',
                       ),
                   ],
@@ -171,13 +173,14 @@ class _FileLeaveScreenState extends State<FileLeaveScreen> {
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(48),
                 ),
-                child: _submitting
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Review & submit'),
+                child:
+                    _submitting
+                        ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                        : const Text('Review & submit'),
               ),
               const SizedBox(height: 12),
               Text(

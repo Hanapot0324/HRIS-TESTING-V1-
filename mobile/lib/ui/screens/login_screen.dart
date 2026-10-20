@@ -96,9 +96,11 @@ class _LoginScreenState extends State<LoginScreen> {
                             ),
                             _UpperCaseFormatter(),
                           ],
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'Enter your employee number'
-                              : null,
+                          validator:
+                              (v) =>
+                                  (v == null || v.trim().isEmpty)
+                                      ? 'Enter your employee number'
+                                      : null,
                         ),
                         const SizedBox(height: 16),
                         TextFormField(
@@ -112,22 +114,23 @@ class _LoginScreenState extends State<LoginScreen> {
                             labelText: 'Password',
                             prefixIcon: const Icon(Icons.lock_outline),
                             suffixIcon: IconButton(
-                              tooltip: _obscure
-                                  ? 'Show password'
-                                  : 'Hide password',
+                              tooltip:
+                                  _obscure ? 'Show password' : 'Hide password',
                               icon: Icon(
                                 _obscure
                                     ? Icons.visibility_outlined
                                     : Icons.visibility_off_outlined,
                               ),
-                              onPressed: () =>
-                                  setState(() => _obscure = !_obscure),
+                              onPressed:
+                                  () => setState(() => _obscure = !_obscure),
                             ),
                           ),
                           onFieldSubmitted: (_) => _submit(),
-                          validator: (v) => (v == null || v.isEmpty)
-                              ? 'Enter your password'
-                              : null,
+                          validator:
+                              (v) =>
+                                  (v == null || v.isEmpty)
+                                      ? 'Enter your password'
+                                      : null,
                         ),
                         if (_error != null) ...[
                           const SizedBox(height: 16),
@@ -143,15 +146,16 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: FilledButton.styleFrom(
                             minimumSize: const Size.fromHeight(48),
                           ),
-                          child: busy
-                              ? const SizedBox(
-                                  height: 20,
-                                  width: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Text('Sign in'),
+                          child:
+                              busy
+                                  ? const SizedBox(
+                                    height: 20,
+                                    width: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                  : const Text('Sign in'),
                         ),
                         const SizedBox(height: 16),
                         Text(

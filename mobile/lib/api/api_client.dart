@@ -141,9 +141,10 @@ class ApiClient {
     required bool authenticated,
   }) {
     final serverMessage = (body?['error'] ?? body?['message']);
-    final msg = serverMessage is String && serverMessage.trim().isNotEmpty
-        ? serverMessage.trim()
-        : null;
+    final msg =
+        serverMessage is String && serverMessage.trim().isNotEmpty
+            ? serverMessage.trim()
+            : null;
 
     // authenticateToken: 401 = no token, 403 'Invalid token' = bad/expired.
     final tokenRejected =

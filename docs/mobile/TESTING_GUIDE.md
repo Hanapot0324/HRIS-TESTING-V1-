@@ -28,7 +28,7 @@ nothing".
 
 ### Mobile app (35 tests)
 
-Needs the Flutter SDK (https://docs.flutter.dev/get-started/install).
+Needs Flutter **3.29 or newer** (Dart 3.7+). Check with `flutter --version`.
 
 ```bash
 cd mobile

@@ -60,15 +60,17 @@ class AsyncBodyState<T> extends State<AsyncBody<T>> {
             child: StatusMessage(
               icon: denied ? Icons.lock_outline : Icons.cloud_off_outlined,
               title: denied ? 'Access denied' : 'Could not load',
-              message: err is ApiException
-                  ? err.message
-                  : 'Something went wrong. Please try again.',
-              action: denied
-                  ? null
-                  : FilledButton.tonal(
-                      onPressed: reload,
-                      child: const Text('Try again'),
-                    ),
+              message:
+                  err is ApiException
+                      ? err.message
+                      : 'Something went wrong. Please try again.',
+              action:
+                  denied
+                      ? null
+                      : FilledButton.tonal(
+                        onPressed: reload,
+                        child: const Text('Try again'),
+                      ),
             ),
           );
         }

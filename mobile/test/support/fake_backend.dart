@@ -61,8 +61,8 @@ class FakeBackend {
         return b['loginTicket'] == 'ticket-password'
             ? json({'message': 'Verification code sent'})
             : json({
-                'error': 'Login session expired. Please sign in again.',
-              }, 401);
+              'error': 'Login session expired. Please sign in again.',
+            }, 401);
       case '/verify-2fa-code':
         if (b['code'] == otp) {
           return json({'verified': true, 'loginTicket': 'ticket-mfa'});

@@ -10,12 +10,15 @@ enum AuthStage { restoring, signedOut, otp, signedIn }
 /// The server decides whether an OTP is needed; the app never skips a step.
 class AuthController extends ChangeNotifier {
   AuthController({
-    required this._api,
-    required this._store,
+    required ApiClient api,
+    required SessionStore store,
     DateTime Function()? clock,
-  }) : _clock = clock ?? DateTime.now {
-    _api.onSessionRejected = () =>
-        signOut(notice: 'Your session has expired. Please sign in again.');
+  }) : _api = api,
+       _store = store,
+       _clock = clock ?? DateTime.now {
+    _api.onSessionRejected =
+        () =>
+            signOut(notice: 'Your session has expired. Please sign in again.');
   }
 
   final ApiClient _api;
@@ -65,10 +68,12 @@ class AuthController extends ChangeNotifier {
   /// Returns an error message, or null on success (signed in or OTP sent).
   Future<String?> signIn(String employeeNumber, String password) =>
       _run(() async {
-        final res = await _api.post('/login', {
-          'employeeNumber': employeeNumber.trim(),
-          'password': password,
-        }, authenticated: false) as Map<String, dynamic>;
+        final res =
+            await _api.post('/login', {
+                  'employeeNumber': employeeNumber.trim(),
+                  'password': password,
+                }, authenticated: false)
+                as Map<String, dynamic>;
         _ticket = res['loginTicket'] as String?;
         if (_ticket == null) {
           throw ApiException(
@@ -87,10 +92,12 @@ class AuthController extends ChangeNotifier {
   });
 
   Future<String?> verifyCode(String code) => _run(() async {
-    final res = await _api.post('/verify-2fa-code', {
-      'loginTicket': _requireTicket(),
-      'code': code.trim(),
-    }, authenticated: false) as Map<String, dynamic>;
+    final res =
+        await _api.post('/verify-2fa-code', {
+              'loginTicket': _requireTicket(),
+              'code': code.trim(),
+            }, authenticated: false)
+            as Map<String, dynamic>;
     _ticket = res['loginTicket'] as String?;
     await _completeOrRequestOtp();
   });
@@ -117,9 +124,11 @@ class AuthController extends ChangeNotifier {
 
   Future<void> _completeOrRequestOtp() async {
     try {
-      final data = await _api.post('/complete-2fa-login', {
-        'loginTicket': _requireTicket(),
-      }, authenticated: false) as Map<String, dynamic>;
+      final data =
+          await _api.post('/complete-2fa-login', {
+                'loginTicket': _requireTicket(),
+              }, authenticated: false)
+              as Map<String, dynamic>;
       final session = Session.fromLoginResponse(data);
       await _store.write(session);
       _session = session;

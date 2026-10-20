@@ -35,23 +35,24 @@ class _LeaveScreenState extends State<LeaveScreen> {
   Future<void> _cancel(LeaveRequest r) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Cancel leave request?'),
-        content: Text(
-          '${r.description ?? r.leaveCode} on '
-          '${r.leaveDate == null ? '—' : fmtDate.format(r.leaveDate!)} will be withdrawn.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Keep'),
+      builder:
+          (ctx) => AlertDialog(
+            title: const Text('Cancel leave request?'),
+            content: Text(
+              '${r.description ?? r.leaveCode} on '
+              '${r.leaveDate == null ? '—' : fmtDate.format(r.leaveDate!)} will be withdrawn.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Keep'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Cancel request'),
+              ),
+            ],
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Cancel request'),
-          ),
-        ],
-      ),
     );
     if (ok != true || !mounted) return;
     try {
@@ -73,10 +74,7 @@ class _LeaveScreenState extends State<LeaveScreen> {
         appBar: AppBar(
           title: const Text('My Leave'),
           bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Requests'),
-              Tab(text: 'Balances'),
-            ],
+            tabs: [Tab(text: 'Requests'), Tab(text: 'Balances')],
           ),
         ),
         floatingActionButton: FloatingActionButton.extended(
@@ -91,33 +89,36 @@ class _LeaveScreenState extends State<LeaveScreen> {
               load: widget.repo.leaveRequests,
               isEmpty: (l) => l.isEmpty,
               emptyMessage: 'You have not filed any leave requests.',
-              builder: (context, list, _) => ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-                itemCount: list.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 8),
-                itemBuilder: (_, i) => _RequestCard(list[i], onCancel: _cancel),
-              ),
+              builder:
+                  (context, list, _) => ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                    itemCount: list.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder:
+                        (_, i) => _RequestCard(list[i], onCancel: _cancel),
+                  ),
             ),
             AsyncBody<List<LeaveBalance>>(
               key: _balancesKey,
               load: widget.repo.leaveBalances,
               isEmpty: (l) => l.isEmpty,
               emptyMessage: 'No leave credits are assigned to you.',
-              builder: (context, list, _) => ListView(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-                children: [
-                  Text(
-                    'Balances are in hours, as computed by HR. Conversion to days '
-                    'depends on your official schedule.',
-                    style: Theme.of(context).textTheme.bodySmall,
+              builder:
+                  (context, list, _) => ListView(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                    children: [
+                      Text(
+                        'Balances are in hours, as computed by HR. Conversion to days '
+                        'depends on your official schedule.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 12),
+                      for (final b in list) ...[
+                        _BalanceCard(b),
+                        const SizedBox(height: 8),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  for (final b in list) ...[
-                    _BalanceCard(b),
-                    const SizedBox(height: 8),
-                  ],
-                ],
-              ),
             ),
           ],
         ),

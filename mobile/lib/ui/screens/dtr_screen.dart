@@ -105,12 +105,13 @@ class _DtrScreenState extends State<DtrScreen> {
               load: () => widget.repo.dtr(range.start, range.end),
               isEmpty: (rows) => rows.isEmpty,
               emptyMessage: 'No attendance records for this period.',
-              builder: (context, rows, _) => ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: rows.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 8),
-                itemBuilder: (_, i) => _DtrCard(rows[i]),
-              ),
+              builder:
+                  (context, rows, _) => ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: rows.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) => _DtrCard(rows[i]),
+                  ),
             ),
           ),
         ],

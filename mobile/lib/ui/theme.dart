@@ -26,9 +26,8 @@ final DateFormat fmtMonth = DateFormat('MMMM yyyy');
 /// Hours exactly as the server reports them, e.g. "12.5 hrs".
 String fmtHours(double? h) {
   if (h == null) return '—';
-  final s = h == h.roundToDouble()
-      ? h.toStringAsFixed(0)
-      : h.toStringAsFixed(2);
+  final s =
+      h == h.roundToDouble() ? h.toStringAsFixed(0) : h.toStringAsFixed(2);
   return '$s hrs';
 }
 

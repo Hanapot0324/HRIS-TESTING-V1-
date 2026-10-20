@@ -54,9 +54,10 @@ class Session {
     employeeNumber: json['employeeNumber'] as String,
     displayName: (json['displayName'] ?? '') as String,
     isDefaultPassword: json['isDefaultPassword'] == true,
-    expiresAt: json['expiresAt'] == null
-        ? null
-        : DateTime.tryParse(json['expiresAt'] as String),
+    expiresAt:
+        json['expiresAt'] == null
+            ? null
+            : DateTime.tryParse(json['expiresAt'] as String),
   );
 
   /// Reads `exp` from a JWT payload without verifying it (display/UX only).

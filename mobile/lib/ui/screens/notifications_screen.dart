@@ -51,32 +51,38 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         load: widget.repo.notifications,
         isEmpty: (l) => l.isEmpty,
         emptyMessage: 'No notifications.',
-        builder: (context, list, _) => ListView.separated(
-          itemCount: list.length,
-          separatorBuilder: (_, _) => const Divider(height: 1),
-          itemBuilder: (context, i) {
-            final n = list[i];
-            final theme = Theme.of(context);
-            return ListTile(
-              leading: Icon(
-                n.read ? Icons.notifications_none : Icons.notifications_active,
-                color: n.read
-                    ? theme.colorScheme.outline
-                    : theme.colorScheme.primary,
-              ),
-              title: Text(
-                n.description,
-                style: n.read
-                    ? null
-                    : const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: n.createdAt == null
-                  ? null
-                  : Text(fmtDate.format(n.createdAt!)),
-              onTap: () => _markRead(n),
-            );
-          },
-        ),
+        builder:
+            (context, list, _) => ListView.separated(
+              itemCount: list.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, i) {
+                final n = list[i];
+                final theme = Theme.of(context);
+                return ListTile(
+                  leading: Icon(
+                    n.read
+                        ? Icons.notifications_none
+                        : Icons.notifications_active,
+                    color:
+                        n.read
+                            ? theme.colorScheme.outline
+                            : theme.colorScheme.primary,
+                  ),
+                  title: Text(
+                    n.description,
+                    style:
+                        n.read
+                            ? null
+                            : const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle:
+                      n.createdAt == null
+                          ? null
+                          : Text(fmtDate.format(n.createdAt!)),
+                  onTap: () => _markRead(n),
+                );
+              },
+            ),
       ),
     );
   }

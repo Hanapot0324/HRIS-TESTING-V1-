@@ -24,16 +24,17 @@ void main() {
   test(
     'DTR uses /api/me/dtr with dates only — no employee identifier',
     () async {
-      backend.routes['/api/me/dtr'] = (_) => backend.json({
-        'records': [
-          {
-            'date': '2026-10-01',
-            'day': 'Thursday',
-            'timeIN': '07:58 AM',
-            'timeOUT': '05:01 PM',
-          },
-        ],
-      });
+      backend.routes['/api/me/dtr'] =
+          (_) => backend.json({
+            'records': [
+              {
+                'date': '2026-10-01',
+                'day': 'Thursday',
+                'timeIN': '07:58 AM',
+                'timeOUT': '05:01 PM',
+              },
+            ],
+          });
       final rows = await repo.dtr(
         DateTime(2026, 10, 1),
         DateTime(2026, 10, 15),
@@ -54,8 +55,8 @@ void main() {
   });
 
   test('voided leave allocations are not shown as balances', () async {
-    backend.routes['/leaveRoute/leave_assignment/employee/1001'] = (_) =>
-        backend.json([
+    backend.routes['/leaveRoute/leave_assignment/employee/1001'] =
+        (_) => backend.json([
           {'leave_code': 'VL', 'remaining_hours': '40', 'voided_at': null},
           {
             'leave_code': 'SL',
@@ -69,8 +70,8 @@ void main() {
   });
 
   test('cancel sends only status 4 for the given request', () async {
-    backend.routes['/leaveRoute/leave_request/55'] = (_) =>
-        backend.json({'ok': true});
+    backend.routes['/leaveRoute/leave_request/55'] =
+        (_) => backend.json({'ok': true});
     await repo.cancelLeave(55);
     final r = backend.requests.single;
     expect(r.method, 'PUT');
@@ -78,8 +79,8 @@ void main() {
   });
 
   test('submit sends type + dates and never a status', () async {
-    backend.routes['/leaveRoute/leave_request'] = (_) =>
-        backend.json({'ok': true});
+    backend.routes['/leaveRoute/leave_request'] =
+        (_) => backend.json({'ok': true});
     await repo.submitLeave('VL', [
       DateTime(2026, 11, 3),
       DateTime(2026, 11, 4),

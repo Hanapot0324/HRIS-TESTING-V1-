@@ -115,8 +115,8 @@ void main() {
     () async {
       build(mfa: false);
       await auth.signIn('1001', 'Correct#Pass1');
-      backend.routes['/api/me/profile'] = (_) =>
-          backend.json({'error': 'Invalid token'}, 403);
+      backend.routes['/api/me/profile'] =
+          (_) => backend.json({'error': 'Invalid token'}, 403);
       await expectLater(
         api.get('/api/me/profile'),
         throwsA(isA<ApiException>()),

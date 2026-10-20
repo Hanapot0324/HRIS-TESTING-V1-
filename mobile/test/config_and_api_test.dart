@@ -83,9 +83,10 @@ void main() {
         '$status token rejection -> sessionExpired + sign-out callback',
         () async {
           var rejected = 0;
-          final api = clientReturning(status, body)
-            ..token = 'tok'
-            ..onSessionRejected = () => rejected++;
+          final api =
+              clientReturning(status, body)
+                ..token = 'tok'
+                ..onSessionRejected = () => rejected++;
           await expectLater(
             api.get('/api/me/profile'),
             throwsA(
@@ -103,9 +104,10 @@ void main() {
 
     test('ownership 403 is access denied, not a sign-out', () async {
       var rejected = 0;
-      final api = clientReturning(403, '{"error":"Access denied"}')
-        ..token = 'tok'
-        ..onSessionRejected = () => rejected++;
+      final api =
+          clientReturning(403, '{"error":"Access denied"}')
+            ..token = 'tok'
+            ..onSessionRejected = () => rejected++;
       await expectLater(
         api.get('/leaveRoute/leave_request/1002'),
         throwsA(

@@ -85,9 +85,8 @@ class _HomeScreenState extends State<HomeScreen> {
         load: _load,
         builder: (context, d, _) {
           final theme = Theme.of(context);
-          final pending = d.requests
-              .where((q) => q.status == LeaveStatus.pending)
-              .length;
+          final pending =
+              d.requests.where((q) => q.status == LeaveStatus.pending).length;
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
