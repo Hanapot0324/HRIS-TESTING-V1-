@@ -532,7 +532,7 @@ td.dash{color:#bbb}
     <div class="r">
       <button class="btn" data-go="dashboard"><span class="mi">arrow_back</span>Dashboard</button>
       <button class="btn" id="exportBtn"><span class="mi">download</span>Export CSV</button>
-      <button class="live-pill" id="liveBtn" title="Pause or resume the live feed"><i></i><span>Live · Auto-refresh</span></button>
+      <button class="live-pill" id="liveBtn" title="Pause or resume auto-refresh"><i></i><span>Auto-refresh</span></button>
       <button class="round" id="refreshBtn" title="Refresh"><span class="mi" style="font-size:18px">refresh</span></button>
     </div>
   </div>
@@ -542,8 +542,8 @@ td.dash{color:#bbb}
   <div class="fr-layout">
     <div class="card tbl-card">
       <div class="tabs2">
-        <button class="on" data-view="summary"><span class="mi">table_chart</span>Daily Summary <em id="cntSummary">0</em></button>
-        <button data-view="raw"><span class="mi">sensors</span>Live Punch Log <em id="cntRaw">0</em></button>
+        <button class="on" data-view="raw"><span class="mi">history</span>Recent Activity <em id="cntRaw">0</em></button>
+        <button data-view="summary"><span class="mi">table_chart</span>Daily Summary <em id="cntSummary">0</em></button>
         <button data-view="absent"><span class="mi">person_off</span>Not Yet In <em id="cntAbsent">0</em></button>
       </div>
       <div class="list-head">
@@ -559,9 +559,9 @@ td.dash{color:#bbb}
           <select class="sel" id="fpunch" aria-label="Punch type">
             <option value="all">All punch types</option><option value="1">Time In</option><option value="2">Break Out</option><option value="3">Break In</option><option value="4">Time Out</option><option value="5">Special Time In</option><option value="6">Special Time Out</option>
           </select>
-          <div class="timebox">Time-in from <input type="time" id="ffrom" aria-label="From"> to <input type="time" id="fto" aria-label="To"></div>
+          <div class="timebox">Time from <input type="time" id="ffrom" aria-label="From"> to <input type="time" id="fto" aria-label="To"></div>
           <select class="sel" id="fsort" aria-label="Sort">
-            <option value="in-asc">Earliest time-in first</option><option value="in-desc">Latest time-in first</option><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="dept">Department</option><option value="late-desc">Most minutes late</option>
+            <option value="in-asc">Earliest first</option><option value="in-desc" selected>Latest first</option><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="dept">Department</option><option value="late-desc">Most minutes late</option>
           </select>
         </div>
         <div class="frow" id="statusChips"></div>
@@ -760,7 +760,7 @@ function renderNA(tab){
 $$(".ftab").forEach(b=>b.onclick=()=>renderNA(+b.dataset.na));renderNA(0);
 
 /* ───────── facial page ───────── */
-const F={q:"",dept:"all",punch:"all",from:"",to:"",sort:"in-asc",status:"all",view:"summary",page:1,size:25,live:true};
+const F={q:"",dept:"all",punch:"all",from:"",to:"",sort:"in-desc",status:"all",view:"raw",page:1,size:25,live:true};
 
 function renderKpis(rows){
   const total=emps.length,present=rows.length,late=rows.filter(r=>r.late>0).length,ontime=present-late,out=rows.filter(r=>r.slots[4]).length;
@@ -849,7 +849,7 @@ function renderTable(rows){
   const list=filterRows(rows), pages=Math.max(1,Math.ceil(list.length/F.size));
   F.page=Math.min(F.page,pages);
   const slice=list.slice((F.page-1)*F.size,F.page*F.size), d=dateStr(DAY), dn=dayName(DAY);
-  const T={summary:["Device Attendance List","One row per employee for today · click a row for details"],raw:["Live Punch Log","Every detection from the device, newest first"],absent:["Not Yet In","Active employees with no detection today"]}[F.view];
+  const T={summary:["Device Attendance List","One row per employee for today · click a row for details"],raw:["Recent Activity","Every detection from the device today · click a row for details"],absent:["Not Yet In","Active employees with no detection today"]}[F.view];
   $("#listTitle").textContent=T[0];$("#listSub").textContent=T[1];$("#countPill").textContent=`${list.length.toLocaleString()} records`;
   let head,body;
   if(F.view==="summary"){
@@ -873,7 +873,7 @@ function renderTable(rows){
 }
 
 function renderFacial(){if($("#view-facial").hidden)return;const rows=summary();renderKpis(rows);renderSide(rows);statusChips(rows);renderTable(rows)}
-function setView(v){F.view=v;F.page=1;$$(".tabs2 button").forEach(b=>b.classList.toggle("on",b.dataset.view===v));renderFacial()}
+function setView(v){if(v!==F.view){F.sort=v==="summary"?"in-asc":"in-desc";$("#fsort").value=F.sort}F.view=v;F.page=1;$$(".tabs2 button").forEach(b=>b.classList.toggle("on",b.dataset.view===v));renderFacial()}
 
 // populate department filter
 $("#fdept").innerHTML+=DEPTS.map(d=>`<option value="${d[0]||"none"}">${d[0]?d[0]+" — "+d[1]:"Unassigned"}</option>`).join("");
@@ -883,11 +883,11 @@ $("#fq").oninput=e=>{F.q=e.target.value;F.page=1;renderFacial()};
 $("#fsize").onchange=e=>{F.size=+e.target.value;F.page=1;renderFacial()};
 $("#statusChips").onclick=e=>{const b=e.target.closest("[data-st]");if(b){F.status=b.dataset.st;F.page=1;renderFacial()}};
 $("#pFirst").onclick=()=>{F.page=1;renderFacial()};$("#pPrev").onclick=()=>{F.page--;renderFacial()};$("#pNext").onclick=()=>{F.page++;renderFacial()};$("#pLast").onclick=e=>{F.page=+e.currentTarget.dataset.pages;renderFacial()};
-$("#resetBtn").onclick=()=>{Object.assign(F,{q:"",dept:"all",punch:"all",from:"",to:"",sort:"in-asc",status:"all",page:1});$("#fq").value="";$("#fdept").value="all";$("#fpunch").value="all";$("#ffrom").value="";$("#fto").value="";$("#fsort").value="in-asc";renderFacial()};
+$("#resetBtn").onclick=()=>{Object.assign(F,{q:"",dept:"all",punch:"all",from:"",to:"",sort:F.view==="summary"?"in-asc":"in-desc",status:"all",page:1});$("#fq").value="";$("#fdept").value="all";$("#fpunch").value="all";$("#ffrom").value="";$("#fto").value="";$("#fsort").value=F.sort;renderFacial()};
 $("#deptCov").onclick=e=>{const r=e.target.closest("[data-dept]");if(r){F.dept=r.dataset.dept;$("#fdept").value=F.dept;F.page=1;renderFacial()}};
 document.addEventListener("click",e=>{const r=e.target.closest("[data-emp]");if(r&&!$("#view-facial").hidden)openDrawer(+r.dataset.emp)});
 $("#refreshBtn").onclick=()=>{renderFacial();toast("Attendance list refreshed")};
-$("#liveBtn").onclick=e=>{F.live=!F.live;e.currentTarget.classList.toggle("paused",!F.live);e.currentTarget.querySelector("span").textContent=F.live?"Live · Auto-refresh":"Paused"};
+$("#liveBtn").onclick=e=>{F.live=!F.live;e.currentTarget.classList.toggle("paused",!F.live);e.currentTarget.querySelector("span").textContent=F.live?"Auto-refresh":"Auto-refresh paused"};
 $("#exportBtn").onclick=()=>{
   const rows=summary(),list=filterRows(rows);let csv;
   if(F.view==="summary")csv=[["Rank","Employee No.","Full Name","Department","Date","Time In","Brk Out","Brk In","Time Out","Special Time In","Special Time Out","Minutes Late","Status"],...list.map(r=>[r.rank,r.emp.id,r.emp.name,r.emp.dept||"Unassigned",dateStr(DAY),...[1,2,3,4,5,6].map(s=>r.slots[s]?fmtT(r.slots[s]):""),r.late,STATUS[r.status].label])];
