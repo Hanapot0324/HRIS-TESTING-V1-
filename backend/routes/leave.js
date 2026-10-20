@@ -134,22 +134,10 @@ const resolveHoursPerDayFromMeta = (meta) => {
   return { hoursPerDay: 8, rateSource: "default" };
 };
 
-/**
- * leave_table.gender_restriction was previously only enforced in the frontend UI (the
- * Autocomplete's leave-type filter) — nothing stopped a direct API call from creating an
- * assignment/request for a gender-restricted leave type against a mismatched employee.
- * Mirrors the frontend's isLeaveAllowedForGender logic in
- * frontend/src/components/LEAVE/leaveGenderUtils.js so both sides agree.
- */
-const isLeaveAllowedForGender = (genderRestriction, employeeGender) => {
-  const restriction = String(genderRestriction || "").trim().toLowerCase();
-  if (!restriction) return true;
-  const g = String(employeeGender || "").trim().toLowerCase();
-  if (!g) return false;
-  if (restriction === "male") return g === "male" || g === "m";
-  if (restriction === "female") return g === "female" || g === "f";
-  return true;
-};
+// leave_table.gender_restriction was previously only enforced in the frontend UI —
+// nothing stopped a direct API call from creating an assignment/request for a
+// gender-restricted leave type. The rule now lives in utils/leaveGender.js.
+const { isLeaveAllowedForGender } = require("../utils/leaveGender");
 
 const getEmployeeGenderAndLeaveRestriction = (employeeNumber, leave_code) =>
   new Promise((resolve) => {

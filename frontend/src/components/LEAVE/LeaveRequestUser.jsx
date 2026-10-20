@@ -920,7 +920,8 @@ const LeaveRequestUser = () => {
   };
   const fetchLeaveTypes = async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/leaveRoute/leave_table`, getAuthHeaders());
+      // Staff-safe list (admin-only /leave_table 403s for staff), filtered server-side.
+      const res = await axios.get(`${API_BASE_URL}/api/me/leave-types`, getAuthHeaders());
       setLeaveTypes(res.data);
     } catch (e) { console.error(e); }
   };

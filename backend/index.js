@@ -77,6 +77,7 @@ const leaveSalaryShortfallRoutes = require('./routes/leaveSalaryShortfallRoutes'
 const attendanceResultRoutes = require('./routes/attendanceResultRoutes');
 const supervisorRoutes = require('./routes/supervisor');
 const attendanceComputationViewStateRoutes = require('./routes/attendanceComputationViewState');
+const meRoutes = require('./routes/me');
 
 
 
@@ -499,6 +500,9 @@ db.query(ensureWorkingHoursRatesTableSQL, (err) => {
 });
 
 // existing routes
+// Staff self-service. Mounted first: several routers below are mounted at '/'
+// with a blanket requireAdmin and would 403 staff requests that reach them.
+app.use('/api/me', meRoutes);
 app.use('/ChildrenRoute', childrenRouter);
 app.use('/VoluntaryRoute', VoluntaryWork);
 app.use('/eligibilityRoute', EligibilityRoute);
