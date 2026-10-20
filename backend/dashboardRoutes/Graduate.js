@@ -8,6 +8,9 @@ const socketService = require("../socket/socketService");
 
 
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const authenticateToken = require("./authMiddleware");
 const {
   fetchDashboardRow,
@@ -20,7 +23,7 @@ router.use(authenticateToken);
 
 
 
-router.get("/graduate-table", (req, res) => {
+router.get("/graduate-table", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM graduate_table";
   db.query(query, (err, results) => {
     if (err) {
@@ -31,7 +34,7 @@ router.get("/graduate-table", (req, res) => {
   });
 });
 
-router.get('/graduate-by-person/:person_id', (req, res) => {
+router.get('/graduate-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM graduate_table WHERE person_id = ?`;
 
@@ -46,7 +49,7 @@ router.get('/graduate-by-person/:person_id', (req, res) => {
 });
 
 // CREATE - Add new graduate study
-router.post("/graduate-table", (req, res) => {
+router.post("/graduate-table", requireBodyOwner('person_id'), (req, res) => {
   console.log("POST Data Received:", req.body);
 
   const {
@@ -112,7 +115,7 @@ router.post("/graduate-table", (req, res) => {
 });
 
 // UPDATE - Update a graduate study by ID
-router.put("/graduate-table/:id", (req, res) => {
+router.put("/graduate-table/:id", requireRowOwner('graduate_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const {
     person_id,
@@ -178,7 +181,7 @@ router.put("/graduate-table/:id", (req, res) => {
 });
 
 // DELETE - Remove a graduate study by ID
-router.delete("/graduate-table/:id", (req, res) => {
+router.delete("/graduate-table/:id", requireRowOwner('graduate_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = `DELETE FROM graduate_table WHERE id = ?`;
 

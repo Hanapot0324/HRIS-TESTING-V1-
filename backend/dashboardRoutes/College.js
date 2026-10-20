@@ -6,6 +6,9 @@ const socketService = require("../socket/socketService");
 const fs = require("fs"); // Import file system module
 const xlsx = require("xlsx");
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin, requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const upload = multer({ dest: "uploads/" });
 const authenticateToken = require("./authMiddleware");
 const {
@@ -19,7 +22,7 @@ router.use(authenticateToken);
 
 
 
-router.get("/data", (req, res) => {
+router.get("/data", requireAdmin, (req, res) => {
   const query = `SELECT * FROM college_table`;
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -28,7 +31,7 @@ router.get("/data", (req, res) => {
 });
 
 // Read (Get All Colleges)
-router.get("/college-table", (req, res) => {
+router.get("/college-table", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM college_table";
   db.query(query, (err, result) => {
     if (err) return res.status(500).send({ message: "Internal Server Error" });
@@ -36,7 +39,7 @@ router.get("/college-table", (req, res) => {
   });
 });
 
-router.get('/college-by-person/:person_id', (req, res) => {
+router.get('/college-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM college_table WHERE person_id = ?`;
   db.query(sql, [person_id], (err, results) => {
@@ -50,7 +53,7 @@ router.get('/college-by-person/:person_id', (req, res) => {
 });
 
 // Create (Add New College Entry)
-router.post("/college-table", (req, res) => {
+router.post("/college-table", requireBodyOwner('person_id'), (req, res) => {
   const { collegeNameOfSchool, collegeDegree, collegePeriodFrom, collegePeriodTo, collegeHighestAttained, collegeYearGraduated, collegeScholarshipAcademicHonorsReceived, person_id } = req.body;
 
   const query = `
@@ -81,7 +84,7 @@ router.post("/college-table", (req, res) => {
 });
 
 // Update College Entry
-router.put("/college-table/:id", (req, res) => {
+router.put("/college-table/:id", requireRowOwner('college_table', 'person_id'), (req, res) => {
   const { collegeNameOfSchool, collegeDegree, collegePeriodFrom, collegePeriodTo, collegeHighestAttained, collegeYearGraduated, collegeScholarshipAcademicHonorsReceived, person_id } = req.body;
 
   const { id } = req.params;
@@ -117,7 +120,7 @@ router.put("/college-table/:id", (req, res) => {
 });
 
 // Delete College Entry
-router.delete("/college-table/:id", (req, res) => {
+router.delete("/college-table/:id", requireRowOwner('college_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = "DELETE FROM college_table WHERE id = ?";
 

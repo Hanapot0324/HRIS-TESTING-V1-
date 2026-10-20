@@ -4,10 +4,12 @@ const authenticateToken = require('./authMiddleware');
 const { getModuleConfig } = require('./dashboardAuditHelper');
 
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin } = require('../middleware/auth');
 
 router.use(authenticateToken);
 
-router.get('/logs', (req, res) => {
+router.get('/logs', requireAdmin, (req, res) => {
   const tableName = String(req.query.table || '').trim();
   const config = getModuleConfig(tableName);
 

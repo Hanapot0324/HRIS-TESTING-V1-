@@ -2,6 +2,9 @@ const db = require("../db");
 const express = require("express");
 const multer = require("multer");
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const socketService = require("../socket/socketService");
 const authenticateToken = require("./authMiddleware");
 const {
@@ -14,7 +17,7 @@ const {
 router.use(authenticateToken);
 
 
-router.get("/other-information", (req, res) => {
+router.get("/other-information", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM other_information_table";
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -23,7 +26,7 @@ router.get("/other-information", (req, res) => {
 });
 
 // GET other information by person_id
-router.get('/other-information-by-person/:person_id', (req, res) => {
+router.get('/other-information-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM other_information_table WHERE person_id = ?`;
   db.query(sql, [person_id], (err, results) => {
@@ -36,7 +39,7 @@ router.get('/other-information-by-person/:person_id', (req, res) => {
   });
 });
 
-router.post("/other-information", (req, res) => {
+router.post("/other-information", requireBodyOwner('person_id'), (req, res) => {
   const { specialSkills, nonAcademicDistinctions, membershipInAssociation, person_id } = req.body;
   const query = "INSERT INTO other_information_table (specialSkills, nonAcademicDistinctions, membershipInAssociation, person_id) VALUES (?, ?, ?, ?)";
   db.query(query, [specialSkills, nonAcademicDistinctions, membershipInAssociation, person_id], (err, result) => {
@@ -53,7 +56,7 @@ router.post("/other-information", (req, res) => {
   });
 });
 
-router.put("/other-information/:id", (req, res) => {
+router.put("/other-information/:id", requireRowOwner('other_information_table', 'person_id'), (req, res) => {
   const { specialSkills, nonAcademicDistinctions, membershipInAssociation, person_id } = req.body;
   const { id } = req.params;
 
@@ -78,7 +81,7 @@ router.put("/other-information/:id", (req, res) => {
   });
 });
 
-router.delete("/other-information/:id", (req, res) => {
+router.delete("/other-information/:id", requireRowOwner('other_information_table', 'person_id'), (req, res) => {
   const { id } = req.params;
 
   const query = "DELETE FROM other_information_table WHERE id = ?";

@@ -112,11 +112,21 @@ Recommendation: a small `backend/routes/me.js` router mounted at `/api/me` that 
 | `/api/me` router | **Done** — `profile`, `dtr`, `leave-types`; identity from token only | `backend/routes/me.js` |
 | B1 leave types 403 for staff | **Fixed** — web + mobile use `/api/me/leave-types` | `frontend/src/components/LEAVE/LeaveRequestUser.jsx` |
 | S9 self-cancel any status | **Fixed** — staff may cancel only pending | `backend/routes/leave.js` |
-| T1 no tests | **Started** — jest + supertest, DB mocked (43 tests) | `backend/__tests__/` |
+| T1 no tests | **Started** — jest + supertest, DB mocked (94 tests) + read-only smoke script for a live server | `backend/__tests__/`, `backend/scripts/security-smoke.js` |
 | Flutter staff app | **Done (v1)** — Home, My DTR, My Leave, My Records, Notifications, Profile; 35 tests | `mobile/` |
-| S2 attendance IDOR, S3 PDS IDOR | **Open** — next step; needs per-route audit against HR web workflows | `backend/dashboardRoutes/*` |
+| S2 attendance IDOR | **Fixed** — deny-by-default policy for all `/attendance` routes: staff read own records, supervisors read (not edit) their departments, everything else HR/admin-only. Unauthenticated `/attendance/api/audit-log` closed | `backend/dashboardRoutes/attendanceAccessPolicy.js` |
+| S3 PDS IDOR | **Fixed** — staff read/change only their own PDS rows (lists scoped, by-person self-only, creates pinned to self, edits/deletes row-owner checked); deleting PDS records, org-wide dumps and audit logs HR-only; staff can't change their employee number | `backend/utils/accessScope.js`, `backend/dashboardRoutes/*.js`, `backend/routes/learning.js` |
 | S6 password-change endpoints, S7 revocation, S8 announcements | **Open** | — |
+| S10 official time | **Open** — `backend/routes/officialtime.js` reads/uploads/edits only require a login (same pattern as S2) | `backend/routes/officialtime.js` |
 | Payslips on mobile | **Not included** — awaiting approval (§7.3) | — |
 
 Known pre-existing issue (not from this work): `vite build` fails on Linux because
 `Login.jsx` imports `../assets/EaristBG.PNG` and the file's case differs.
+
+### Behaviour changes from the S2/S3 fixes (for HR to confirm)
+
+- **Staff "Attendance Form / User State" pages** (`/attendance_form`, `/attendance-user-state`) edit punch states and read any employee. For staff accounts these calls are now refused (HR-only). HR/admin are unaffected.
+- **Staff DTR page** also tried to save computed late/undertime to `overall_attendance_record`. For staff that save is now refused; the page already handles the failure and keeps its local copy. HR's computation modules still save it.
+- **Supervisors** keep read-only DTR viewing for employees in their assigned departments (same rule as the supervisor DTR page), and can still mark their DTRs as printed.
+- **Staff profile save** can no longer change the employee number (`agencyEmployeeNum`).
+- Staff pages that loaded "all employees" lists just to find their own row (person list, employment category, voluntary work) now receive only their own row.

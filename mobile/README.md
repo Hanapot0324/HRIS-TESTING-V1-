@@ -50,6 +50,8 @@ builds and only for `localhost`, `127.0.0.1` or `10.0.2.2`.
 
 ## Tests
 
+Full manual + automated test steps: `docs/mobile/TESTING_GUIDE.md`.
+
 ```bash
 flutter analyze
 flutter test

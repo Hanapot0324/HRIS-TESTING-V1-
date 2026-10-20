@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const db = require('../db');
 const xlsx = require('xlsx');
 const fs = require('fs');
 const { upload } = require('../middleware/upload');
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, requireAdmin, requireSelfOrAdmin } = require('../middleware/auth');
 const socketService = require('../socket/socketService');
 const {
   fetchDashboardRow,
@@ -18,7 +20,7 @@ const {
 // ============================================
 
 // GET all learning and development records
-router.get('/learning_and_development_table', authenticateToken, (req, res) => {
+router.get('/learning_and_development_table', authenticateToken, ownRowsOnly('person_id'), (req, res) => {
   const query = 'SELECT * FROM learning_and_development_table';
   db.query(query, (err, result) => {
     if (err) {
@@ -30,7 +32,7 @@ router.get('/learning_and_development_table', authenticateToken, (req, res) => {
 });
 
 // GET learning and development records by person_id
-router.get('/learning_and_development_table/by-person/:person_id', authenticateToken, (req, res) => {
+router.get('/learning_and_development_table/by-person/:person_id', authenticateToken, requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   console.log('Received request for person_id:', person_id);
 
@@ -46,7 +48,7 @@ router.get('/learning_and_development_table/by-person/:person_id', authenticateT
 });
 
 // POST - Add new learning and development record
-router.post('/learning_and_development_table', authenticateToken, (req, res) => {
+router.post('/learning_and_development_table', authenticateToken, requireBodyOwner('person_id'), (req, res) => {
   const {
     titleOfProgram,
     dateFrom,
@@ -98,7 +100,7 @@ router.post('/learning_and_development_table', authenticateToken, (req, res) => 
 });
 
 // PUT - Update existing learning and development record
-router.put('/learning_and_development_table/:id', authenticateToken, (req, res) => {
+router.put('/learning_and_development_table/:id', authenticateToken, requireRowOwner('learning_and_development_table', 'person_id'), (req, res) => {
   const {
     titleOfProgram,
     dateFrom,
@@ -165,7 +167,7 @@ router.put('/learning_and_development_table/:id', authenticateToken, (req, res) 
 });
 
 // DELETE - Delete learning and development record
-router.delete('/learning_and_development_table/:id', authenticateToken, (req, res) => {
+router.delete('/learning_and_development_table/:id', authenticateToken, requireRowOwner('learning_and_development_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = 'DELETE FROM learning_and_development_table WHERE id = ?';
 
@@ -206,7 +208,7 @@ function excelDateToUTCDate(excelDate) {
 router.post(
   '/upload_learning_and_development_table',
   authenticateToken,
-  upload.single('file'),
+  requireAdmin, upload.single('file'),
   (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });

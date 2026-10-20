@@ -2,6 +2,9 @@ const db = require("../db");
 const express = require("express");
 const multer = require("multer");
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const socketService = require("../socket/socketService");
 const authenticateToken = require("./authMiddleware");
 const {
@@ -15,7 +18,7 @@ router.use(authenticateToken);
 
 
 
-router.get("/work-experience-table", (req, res) => {
+router.get("/work-experience-table", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM work_experience_table";
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -24,7 +27,7 @@ router.get("/work-experience-table", (req, res) => {
 });
 
 // GET work experience by person_id
-router.get('/work-experience-by-person/:person_id', (req, res) => {
+router.get('/work-experience-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM work_experience_table WHERE person_id = ?`;
   db.query(sql, [person_id], (err, results) => {
@@ -37,7 +40,7 @@ router.get('/work-experience-by-person/:person_id', (req, res) => {
   });
 });
 
-router.post("/work-experience-table", (req, res) => {
+router.post("/work-experience-table", requireBodyOwner('person_id'), (req, res) => {
   const { person_id, workDateFrom, workDateTo, workPositionTitle, workCompany, workMonthlySalary, SalaryJobOrPayGrade, StatusOfAppointment, isGovtService } = req.body;
 
   const query = "INSERT INTO work_experience_table (person_id, workDateFrom, workDateTo, workPositionTitle, workCompany, workMonthlySalary, SalaryJobOrPayGrade, StatusOfAppointment, isGovtService) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -56,7 +59,7 @@ router.post("/work-experience-table", (req, res) => {
   });
 });
 
-router.put("/work-experience-table/:id", (req, res) => {
+router.put("/work-experience-table/:id", requireRowOwner('work_experience_table', 'person_id'), (req, res) => {
   const { person_id, workDateFrom, workDateTo, workPositionTitle, workCompany, workMonthlySalary, SalaryJobOrPayGrade, StatusOfAppointment, isGovtService } = req.body;
   const { id } = req.params;
 
@@ -81,7 +84,7 @@ router.put("/work-experience-table/:id", (req, res) => {
   });
 });
 
-router.delete("/work-experience-table/:id", (req, res) => {
+router.delete("/work-experience-table/:id", requireRowOwner('work_experience_table', 'person_id'), (req, res) => {
   const { id } = req.params;
 
   const query = "DELETE FROM work_experience_table WHERE id = ?";

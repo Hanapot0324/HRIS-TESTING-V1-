@@ -4,6 +4,9 @@ const multer = require("multer");
 const xlsx = require("xlsx");
 const fs = require("fs"); // Import file system module
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const socketService = require("../socket/socketService");
 const authenticateToken = require("./authMiddleware");
 const {
@@ -18,7 +21,7 @@ router.use(authenticateToken);
 
 
 // CRUD routes (e.g., Create, Read, Update, Delete)
-router.get("/data", (req, res) => {
+router.get("/data", requireAdmin, (req, res) => {
   const query = `SELECT * FROM  voluntary_work_table`;
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -28,7 +31,7 @@ router.get("/data", (req, res) => {
 
 // more CRUD routes...
 // Read (Get All Items)
-router.get("/voluntary-work", (req, res) => {
+router.get("/voluntary-work", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM  voluntary_work_table";
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -37,7 +40,7 @@ router.get("/voluntary-work", (req, res) => {
 });
 
 // Create (Add New Item)
-router.post("/voluntary-work", (req, res) => {
+router.post("/voluntary-work", requireBodyOwner('person_id'), (req, res) => {
   const { nameAndAddress, dateFrom, dateTo, numberOfHours, natureOfWork, person_id } = req.body;
   const query = "INSERT INTO  voluntary_work_table (nameAndAddress, dateFrom, dateTo, numberOfHours, natureOfWork, person_id) VALUES (?, ?, ?, ?, ?, ?)";
   db.query(query, [nameAndAddress, dateFrom, dateTo, numberOfHours, natureOfWork, person_id], (err, result) => {
@@ -55,7 +58,7 @@ router.post("/voluntary-work", (req, res) => {
 });
 
 // Update Item
-router.put("/voluntary-work/:id", (req, res) => {
+router.put("/voluntary-work/:id", requireRowOwner('voluntary_work_table', 'person_id'), (req, res) => {
   const { nameAndAddress, dateFrom, dateTo, numberOfHours, natureOfWork, person_id } = req.body;
   const { id } = req.params;
   const query = "UPDATE voluntary_work_table SET nameAndAddress = ?, dateFrom = ?, dateTo = ?, numberOfHours = ?, natureOfWork = ?, person_id = ?  WHERE id = ?";
@@ -80,7 +83,7 @@ router.put("/voluntary-work/:id", (req, res) => {
 });
 
 // Delete Item
-router.delete("/voluntary-work/:id", (req, res) => {
+router.delete("/voluntary-work/:id", requireRowOwner('voluntary_work_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = "DELETE FROM voluntary_work_table WHERE id = ?";
 
@@ -107,7 +110,7 @@ function excelDateToUTCDate(excelDate) {
   return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
 }
 
-router.post("/upload_voluntary_work_table", uploads.single("file"), (req, res) => {
+router.post("/upload_voluntary_work_table", requireAdmin, uploads.single("file"), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "No file uploaded" });
   }

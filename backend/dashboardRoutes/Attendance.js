@@ -1,6 +1,9 @@
   const db = require('../db');
   const express = require('express');
   const router = express.Router();
+  // Who may call each route below (deny-by-default; see attendanceAccessPolicy.js).
+  const { attendanceAccessPolicy } = require('./attendanceAccessPolicy');
+  router.use(...attendanceAccessPolicy);
   const jwt = require('jsonwebtoken');
   const { notifyAttendanceChanged } = require('../socket/socketService');
   const {

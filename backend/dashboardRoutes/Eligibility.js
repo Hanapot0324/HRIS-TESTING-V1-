@@ -4,6 +4,9 @@ const multer = require("multer");
 const fs = require("fs");
 const xlsx = require("xlsx");
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin, requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const socketService = require("../socket/socketService");
 const authenticateToken = require("./authMiddleware");
 const {
@@ -27,7 +30,7 @@ function excelDateToUTCDate(excelDate) {
 
 
 //data
-router.get("/data", (req, res) => {
+router.get("/data", requireAdmin, (req, res) => {
   const query = `SELECT * FROM eligibility_table`;
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -36,7 +39,7 @@ router.get("/data", (req, res) => {
 });
 
 // Read (Get All Eligibility Data)
-router.get("/eligibility", (req, res) => {
+router.get("/eligibility", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM eligibility_table";
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -45,7 +48,7 @@ router.get("/eligibility", (req, res) => {
 });
 
 // For eligibility records
-router.get('/eligibility-by-person/:person_id', (req, res) => {
+router.get('/eligibility-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM eligibility_table WHERE person_id = ?`;
   db.query(sql, [person_id], (err, results) => {
@@ -59,7 +62,7 @@ router.get('/eligibility-by-person/:person_id', (req, res) => {
 });
 
 // Create (Add New Eligibility)
-router.post("/eligibility", (req, res) => {
+router.post("/eligibility", requireBodyOwner('person_id'), (req, res) => {
   const { eligibilityName, eligibilityRating, eligibilityDateOfExam, eligibilityPlaceOfExam, licenseNumber, DateOfValidity, person_id } = req.body;
   const query = "INSERT INTO eligibility_table (eligibilityName, eligibilityRating, eligibilityDateOfExam, eligibilityPlaceOfExam, licenseNumber, DateOfValidity, person_id) VALUES (?, ?, ?, ?, ?, ?, ?)";
   db.query(query, [eligibilityName, eligibilityRating, eligibilityDateOfExam, eligibilityPlaceOfExam, licenseNumber, DateOfValidity, person_id], (err, result) => {
@@ -80,7 +83,7 @@ router.post("/eligibility", (req, res) => {
 });
 
 // Update Eligibility Record
-router.put("/eligibility/:id", (req, res) => {
+router.put("/eligibility/:id", requireRowOwner('eligibility_table', 'person_id'), (req, res) => {
   const { eligibilityName, eligibilityRating, eligibilityDateOfExam, eligibilityPlaceOfExam, licenseNumber, DateOfValidity, person_id } = req.body;
   const { id } = req.params;
   const query = "UPDATE eligibility_table SET eligibilityName = ?, eligibilityRating = ?, eligibilityDateOfExam = ?, eligibilityPlaceOfExam = ?, licenseNumber = ?, DateOfValidity = ?, person_id = ? WHERE id = ?";
@@ -108,7 +111,7 @@ router.put("/eligibility/:id", (req, res) => {
 });
 
 // Delete Eligibility Record
-router.delete("/eligibility/:id", (req, res) => {
+router.delete("/eligibility/:id", requireRowOwner('eligibility_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = "DELETE FROM eligibility_table WHERE id = ?";
 

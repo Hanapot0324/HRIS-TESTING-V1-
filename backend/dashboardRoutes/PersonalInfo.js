@@ -1,6 +1,22 @@
 const db = require("../db");
 const express = require("express");
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin, requireSelfOrAdmin } = require('../middleware/auth');
+const {
+  isAdminRequest,
+  ownRowsOnly,
+  requireBodyOwner,
+  requireRowOwner,
+} = require('../utils/accessScope');
+
+/** Staff may not change their own employee number through a profile save. */
+const lockEmployeeNumberToPath = (req, res, next) => {
+  if (!isAdminRequest(req)) {
+    req.body = { ...(req.body || {}), agencyEmployeeNum: req.params.employeeNumber };
+  }
+  next();
+};
 const socketService = require("../socket/socketService");
 const authenticateToken = require("./authMiddleware");
 const {
@@ -18,7 +34,7 @@ router.use(authenticateToken);
 
 
 
-router.get('/person_table', (req, res) => {
+router.get('/person_table', ownRowsOnly('agencyEmployeeNum'), (req, res) => {
   const query = 'SELECT * FROM person_table';
   db.query(query, (err, result) => {
     if (err) {
@@ -30,7 +46,7 @@ router.get('/person_table', (req, res) => {
 });
 
 // GET person by employee number
-router.get('/person_table/:employeeNumber', (req, res) => {
+router.get('/person_table/:employeeNumber', requireSelfOrAdmin('employeeNumber'), (req, res) => {
   const { employeeNumber } = req.params;
   const query = 'SELECT * FROM person_table WHERE agencyEmployeeNum = ?';
   
@@ -51,7 +67,7 @@ router.get('/person_table/:employeeNumber', (req, res) => {
 
 
 
-router.post('/person_table', (req, res) => {
+router.post('/person_table', requireBodyOwner('agencyEmployeeNum'), (req, res) => {
   const {
     firstName, middleName, lastName, nameExtension, birthDate, placeOfBirth, sex, civilStatus, citizenship, heightCm, weightKg, bloodType,
     gsisNum, pagibigNum, philhealthNum, sssNum, tinNum, agencyEmployeeNum,
@@ -97,7 +113,7 @@ router.post('/person_table', (req, res) => {
 
 
 
-router.put('/person_table/:id', (req, res) => {
+router.put('/person_table/:id', requireRowOwner('person_table', 'agencyEmployeeNum'), (req, res) => {
   const { id } = req.params;
   const {
     firstName, middleName, lastName, nameExtension, birthDate, placeOfBirth, sex, civilStatus, citizenship, heightCm, weightKg, bloodType,
@@ -149,7 +165,7 @@ router.put('/person_table/:id', (req, res) => {
 });
 
 // Update only name fields by employee number
-router.put('/person/:employeeNumber', (req, res) => {
+router.put('/person/:employeeNumber', requireSelfOrAdmin('employeeNumber'), (req, res) => {
   const { employeeNumber } = req.params;
   const { firstName, middleName, lastName, nameExtension } = req.body;
 
@@ -194,7 +210,7 @@ router.put('/person/:employeeNumber', (req, res) => {
 });
 
 // Add this route for updating by employee number
-router.put('/person_table/by-employee/:employeeNumber', (req, res) => {
+router.put('/person_table/by-employee/:employeeNumber', requireSelfOrAdmin('employeeNumber'), lockEmployeeNumberToPath, (req, res) => {
   const { employeeNumber } = req.params;
   const {
     firstName, middleName, lastName, nameExtension, birthDate, placeOfBirth, sex, civilStatus, citizenship, heightCm, weightKg, bloodType,
@@ -260,7 +276,7 @@ router.put('/person_table/by-employee/:employeeNumber', (req, res) => {
 
 
 
-router.delete('/person_table/:id', (req, res) => {
+router.delete('/person_table/:id', requireAdmin, (req, res) => {
   const { id } = req.params;
   const query = 'DELETE FROM person_table WHERE id = ?';
  
@@ -287,7 +303,7 @@ router.delete('/person_table/:id', (req, res) => {
 });
 
 
-router.delete('/remove-profile-picture/:id', (req, res) => {
+router.delete('/remove-profile-picture/:id', requireRowOwner('person_table', 'agencyEmployeeNum'), (req, res) => {
   const { id } = req.params;
   const query = 'UPDATE person_table SET profile_picture = NULL WHERE id = ?';
   

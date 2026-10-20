@@ -1,8 +1,10 @@
 const db = require("../db");
 const express = require('express');
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { ownRowsOnly } = require('../utils/accessScope');
 const jwt = require('jsonwebtoken');
-const { requireAdmin, JWT_SECRET } = require('../middleware/auth');
+const { requireAdmin, requireSelfOrAdmin, JWT_SECRET } = require('../middleware/auth');
 
 // Authentication middleware
 function authenticateToken(req, res, next) {
@@ -204,7 +206,7 @@ router.delete('/employment-type-config/:id', authenticateToken, requireAdmin, (r
 // ============================================================
 
 // GET ALL - Fetch all employment categories
-router.get('/employment-category', authenticateToken, (req, res) => {
+router.get('/employment-category', authenticateToken, ownRowsOnly('employeeNumber'), (req, res) => {
   const sql = `
     SELECT
       ec.id,
@@ -238,7 +240,7 @@ router.get('/employment-category', authenticateToken, (req, res) => {
 });
 
 // GET ONE - Fetch employment category by employee number
-router.get('/employment-category/:employeeNumber', authenticateToken, (req, res) => {
+router.get('/employment-category/:employeeNumber', authenticateToken, requireSelfOrAdmin('employeeNumber'), (req, res) => {
   const { employeeNumber } = req.params;
 
   const sql = `
@@ -277,7 +279,7 @@ router.get('/employment-category/:employeeNumber', authenticateToken, (req, res)
 });
 
 // SEARCH
-router.get('/employment-category/search/:searchTerm', authenticateToken, (req, res) => {
+router.get('/employment-category/search/:searchTerm', authenticateToken, requireAdmin, (req, res) => {
   const { searchTerm } = req.params;
 
   if (!searchTerm || searchTerm.trim() === '')

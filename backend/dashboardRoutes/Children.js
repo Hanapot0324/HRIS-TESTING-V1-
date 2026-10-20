@@ -3,6 +3,9 @@ const express = require("express");
 const multer = require("multer");
 const fs = require("fs"); // Import file system module
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const xlsx = require("xlsx");
 const socketService = require("../socket/socketService");
 const authenticateToken = require("./authMiddleware");
@@ -18,7 +21,7 @@ router.use(authenticateToken);
 
 
 // CRUD for Children
-router.get("/children-table", (req, res) => {
+router.get("/children-table", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM children_table";
   db.query(query, (err, results) => {
     if (err) return res.status(500).json({ error: "Error fetching children" });
@@ -27,7 +30,7 @@ router.get("/children-table", (req, res) => {
 });
 
 // For children records
-router.get('/children-by-person/:person_id', (req, res) => {
+router.get('/children-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM children_table WHERE person_id = ?`;
   db.query(sql, [person_id], (err, results) => {
@@ -40,7 +43,7 @@ router.get('/children-by-person/:person_id', (req, res) => {
   });
 });
 
-router.post("/children-table", (req, res) => {
+router.post("/children-table", requireBodyOwner('person_id'), (req, res) => {
   const { childrenFirstName, childrenMiddleName, childrenLastName, childrenNameExtension, dateOfBirth, person_id } = req.body;
   const query = `INSERT INTO children_table (childrenFirstName, childrenMiddleName, childrenLastName, childrenNameExtension, dateOfBirth, person_id) VALUES (?, ?, ?, ?, ?, ?)`;
   db.query(query, [childrenFirstName, childrenMiddleName, childrenLastName, childrenNameExtension, dateOfBirth, person_id], (err, result) => {
@@ -57,7 +60,7 @@ router.post("/children-table", (req, res) => {
   });
 });
 
-router.put("/children-table/:id", (req, res) => {
+router.put("/children-table/:id", requireRowOwner('children_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const { childrenFirstName, childrenMiddleName, childrenLastName, childrenNameExtension, dateOfBirth, person_id } = req.body;
   const query = `UPDATE children_table SET childrenFirstName = ?, childrenMiddleName = ?, childrenLastName = ?, childrenNameExtension = ?, dateOfBirth = ?, person_id = ? WHERE id = ?`;
@@ -81,7 +84,7 @@ router.put("/children-table/:id", (req, res) => {
   });
 });
 
-router.delete("/children-table/:id", (req, res) => {
+router.delete("/children-table/:id", requireRowOwner('children_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = `DELETE FROM children_table WHERE id = ?`;
 

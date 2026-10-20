@@ -4,6 +4,9 @@ const multer = require("multer");
 const xlsx = require("xlsx");
 const uploads = multer({ dest: "uploads/" });
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin, requireSelfOrAdmin } = require('../middleware/auth');
+const { ownRowsOnly, requireBodyOwner, requireRowOwner } = require('../utils/accessScope');
 const fs = require("fs");
 const authenticateToken = require("./authMiddleware");
 const socketService = require("../socket/socketService");
@@ -20,7 +23,7 @@ router.use(authenticateToken);
 
 
 
-router.get("/data", (req, res) => {
+router.get("/data", requireAdmin, (req, res) => {
   const query = "SELECT * FROM vocational_table";
   db.query(query, (err, result) => {
     if (err) return res.status(500).send(err);
@@ -29,7 +32,7 @@ router.get("/data", (req, res) => {
 });
 
 // CRUD for vocational_table
-router.get("/vocational-table", (req, res) => {
+router.get("/vocational-table", ownRowsOnly('person_id'), (req, res) => {
   const query = "SELECT * FROM vocational_table";
   db.query(query, (err, result) => {
     if (err) {
@@ -41,7 +44,7 @@ router.get("/vocational-table", (req, res) => {
 });
 
 // GET vocational by person_id
-router.get('/vocational-by-person/:person_id', (req, res) => {
+router.get('/vocational-by-person/:person_id', requireSelfOrAdmin('person_id'), (req, res) => {
   const { person_id } = req.params;
   const sql = `SELECT * FROM vocational_table WHERE person_id = ?`;
   db.query(sql, [person_id], (err, results) => {
@@ -54,7 +57,7 @@ router.get('/vocational-by-person/:person_id', (req, res) => {
   });
 });
 
-router.post("/vocational-table", (req, res) => {
+router.post("/vocational-table", requireBodyOwner('person_id'), (req, res) => {
   const { vocationalNameOfSchool, vocationalDegree, vocationalPeriodFrom, vocationalPeriodTo, vocationalHighestAttained, vocationalYearGraduated, person_id } = req.body;
   const query = "INSERT INTO vocational_table (vocationalNameOfSchool, vocationalDegree, vocationalPeriodFrom, vocationalPeriodTo, vocationalHighestAttained, vocationalYearGraduated, person_id) VALUES (?, ?, ?, ?, ?, ?, ?)";
   db.query(query, [vocationalNameOfSchool, vocationalDegree, vocationalPeriodFrom, vocationalPeriodTo, vocationalHighestAttained, vocationalYearGraduated, person_id], (err, result) => {
@@ -74,7 +77,7 @@ router.post("/vocational-table", (req, res) => {
   });
 });
 
-router.put("/vocational-table/:id", (req, res) => {
+router.put("/vocational-table/:id", requireRowOwner('vocational_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const { vocationalNameOfSchool, vocationalDegree, vocationalPeriodFrom, vocationalPeriodTo, vocationalHighestAttained, vocationalYearGraduated, person_id} = req.body;
   const query = "UPDATE vocational_table SET vocationalNameOfSchool = ?, vocationalDegree = ?, vocationalPeriodFrom = ?, vocationalPeriodTo = ?, vocationalHighestAttained = ?, vocationalYearGraduated = ?, person_id = ? WHERE id = ?";
@@ -101,7 +104,7 @@ router.put("/vocational-table/:id", (req, res) => {
   });
 });
 
-router.delete("/vocational-table/:id", (req, res) => {
+router.delete("/vocational-table/:id", requireRowOwner('vocational_table', 'person_id'), (req, res) => {
   const { id } = req.params;
   const query = "DELETE FROM vocational_table WHERE id = ?";
 

@@ -2,13 +2,15 @@ const db = require("../db");
 const express = require("express");
 const multer = require("multer");
 const router = express.Router();
+// Record ownership (S3): staff may only read/change their own PDS rows.
+const { requireAdmin } = require('../middleware/auth');
 const authenticateToken = require("./authMiddleware");
 
 router.use(authenticateToken);
 
 
 
-router.get("/all_data", (req, res) => {
+router.get("/all_data", requireAdmin, (req, res) => {
   const query = `
     SELECT 
     person_table.*,
@@ -28,7 +30,7 @@ router.get("/all_data", (req, res) => {
   });
 });
 
-router.get("/all_data2", (req, res) => {
+router.get("/all_data2", requireAdmin, (req, res) => {
   const query = `
     SELECT 
     person_table.*,
